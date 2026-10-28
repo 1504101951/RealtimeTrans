@@ -136,6 +136,27 @@ void main() {
     );
   });
 
+  test('输入翻译语言：未设置时复制全局两项，设置后与全局隔离，次要语言「不设置」可往返（#99）', () {
+    // 边界：旧偏好没有输入翻译键时取全局 zh-CN/en；保存后改全局次要语言不影响输入翻译；
+    // 输入翻译次要语言设为 null 往返后仍为 null，不回落到全局；输入翻译两项相同时校验失败。
+    final legacy = AppSettings.fromMap({
+      'primaryLanguage': 'zh-CN',
+      'secondaryLanguage': 'en',
+    });
+    expect(legacy.inputPrimaryLanguage, 'zh-CN');
+    expect(legacy.inputSecondaryLanguage, 'en');
+    legacy
+      ..inputSecondaryLanguage = null
+      ..secondaryLanguage = 'ja';
+    final restored = AppSettings.fromMap(legacy.toMap());
+    expect(restored.secondaryLanguage, 'ja');
+    expect(restored.inputSecondaryLanguage, isNull);
+    expect(restored.inputDirection.secondaryCode, isNull);
+    expect(restored.validate, returnsNormally);
+    restored.inputSecondaryLanguage = 'zh-CN';
+    expect(restored.validate, throwsFormatException);
+  });
+
   test('处理提示词缺省为默认值，修改后可往返保存，空提示词被拒绝（#100）', () {
     // 边界：未保存过时三种模式都等于默认提示词；只改润色后往返仍保持其余两种为默认；润色改为空白时校验失败。
     final settings = AppSettings(primaryLanguage: 'zh-CN');
@@ -258,12 +279,15 @@ void main() {
 
   test('相同语言与无系统修饰键的快捷键不能保存', () {
     // en 与 en-US 等价；Shift+A 是普通输入，不允许注册为全局翻译热键。
+    // 输入翻译语言在构造时复制全局两项，与全局隔离，因此两组都要改为有效语言（#99）。
     final settings = AppSettings(
       primaryLanguage: 'en',
       secondaryLanguage: 'en-US',
     );
     expect(settings.validate, throwsFormatException);
-    settings.secondaryLanguage = 'zh-CN';
+    settings
+      ..secondaryLanguage = 'zh-CN'
+      ..inputSecondaryLanguage = 'zh-CN';
     settings.shortcutModifiers = 512;
     expect(settings.validate, throwsFormatException);
     settings.shortcutModifiers = 6144;

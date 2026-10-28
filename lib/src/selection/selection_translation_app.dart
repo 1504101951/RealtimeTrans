@@ -95,6 +95,7 @@ class _TranslateAppState extends State<TranslateApp> {
         widget.session.begin(
           sessionId: sessionId,
           text: text,
+          input: gesture == SelectionGestureTypes.inputHotkey,
           awaitSelection:
               gesture == SelectionGestureTypes.selectAll ||
               gesture == SelectionGestureTypes.keyboard ||
@@ -177,8 +178,11 @@ class _TranslateAppState extends State<TranslateApp> {
     final activeProvider = retry
         ? widget.session.activeProvider
         : widget.session.provider;
+    // 历史记录的目标语言按本次实际使用的一组语言解析：输入翻译用输入翻译语言（#99）。
     final activeLanguage = retry
         ? widget.session.activeLanguage
+        : _replaceSessionId == id
+        ? widget.session.inputLanguage
         : widget.session.language;
     final sourceLabel = _sourceAppName;
     // 读取与翻译共用会话取消边界，迟到的原文不能覆盖用户的新选区。

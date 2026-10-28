@@ -74,6 +74,9 @@ class _SettingsPageState extends State<_SettingsPage>
   final Map<String, Map<String, String>?> _credentials = {};
   SettingsSection _section = SettingsSection.general;
 
+  /// 翻译语言组正在编辑输入翻译（true）还是全局翻译（false）的语言；不保存，每次打开回到全局翻译（#99）。
+  bool _inputLanguages = false;
+
   /// 无参数；加载主引擎偏好，并监听菜单引起的偏好变化，无返回值。
   @override
   void initState() {
@@ -671,22 +674,51 @@ class _SettingsPageState extends State<_SettingsPage>
                 ] else if (_section == SettingsSection.translation) ...[
                   NativeGlassGroup(
                     children: [
-                      const Text(
-                        '翻译语言',
-                        style: TextStyle(fontWeight: FontWeight.w600),
+                      // 标题行右侧切换编辑哪一组语言；输入翻译与全局翻译各自保存（#99）。
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              '翻译语言',
+                              style: TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          NativeGlassSegments<bool>(
+                            value: _inputLanguages,
+                            options: const {false: '全局翻译', true: '输入翻译'},
+                            onChanged: (value) =>
+                                setState(() => _inputLanguages = value),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 12),
                       _language(
                         '主要语言',
-                        settings.primaryLanguage,
-                        (v) => settings.primaryLanguage = v,
+                        _inputLanguages
+                            ? settings.inputPrimaryLanguage
+                            : settings.primaryLanguage,
+                        (v) {
+                          if (_inputLanguages) {
+                            settings.inputPrimaryLanguage = v;
+                          } else {
+                            settings.primaryLanguage = v;
+                          }
+                        },
                       ),
                       const Divider(height: 1),
                       _language(
                         '次要语言（可选）',
-                        settings.secondaryLanguage ?? '',
-                        (v) =>
-                            settings.secondaryLanguage = v.isEmpty ? null : v,
+                        (_inputLanguages
+                                ? settings.inputSecondaryLanguage
+                                : settings.secondaryLanguage) ??
+                            '',
+                        (v) {
+                          final secondary = v.isEmpty ? null : v;
+                          if (_inputLanguages) {
+                            settings.inputSecondaryLanguage = secondary;
+                          } else {
+                            settings.secondaryLanguage = secondary;
+                          }
+                        },
                         optional: true,
                       ),
                       Padding(

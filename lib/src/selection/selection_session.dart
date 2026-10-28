@@ -12,13 +12,17 @@ import '../translation/translation_types.dart';
 
 /// Dart 侧选区会话。激活前不请求翻译服务。
 class SelectionSession extends ChangeNotifier {
-  /// provider/detectLanguage/language 为默认服务、设备语言识别与方向；lookupDefinition 查询词典释义，省略时不查词典。
+  /// provider/detectLanguage/language 为默认服务、设备语言识别与全局翻译方向；inputLanguage 为输入翻译方向，
+  /// 省略时与 language 相同；lookupDefinition 查询词典释义，省略时不查词典。
   SelectionSession({
     required this.provider,
     required this.detectLanguage,
     LanguageDirection? language,
+    LanguageDirection? inputLanguage,
     Future<String?> Function(String text)? lookupDefinition,
   }) : language = language ?? LanguageDirection.systemDefault(),
+       inputLanguage =
+           inputLanguage ?? language ?? LanguageDirection.systemDefault(),
        lookupDefinition = lookupDefinition ?? _noDefinition;
 
   /// text 为待查文字；未接入词典时始终返回 null。
@@ -44,6 +48,12 @@ class SelectionSession extends ChangeNotifier {
   // 设置更新供下一次翻译使用；已激活的请求保留自己的服务与语言方向。
   TranslationProvider provider;
   LanguageDirection language;
+
+  /// 输入翻译快捷键使用的语言方向，与全局翻译隔离（#99）。
+  LanguageDirection inputLanguage;
+
+  /// 当前会话是否由输入翻译快捷键发起；激活时据此选择语言方向（#99）。
+  bool _input = false;
   final Future<String?> Function(String text) detectLanguage;
 
   /// 查询 macOS 词典释义；查不到返回 null。
@@ -121,13 +131,16 @@ class SelectionSession extends ChangeNotifier {
   StreamSubscription<TranslationEvent>? _translation;
   Completer<void>? _completion;
 
-  /// sessionId 标识选区，text 为已读原文；awaitSelection 允许键盘手势先显示按钮，点击后补读。
+  /// sessionId 标识选区，text 为已读原文；awaitSelection 允许键盘手势先显示按钮，点击后补读；
+  /// input 表示由输入翻译快捷键发起，激活时使用输入翻译的语言方向（#99）。
   void begin({
     required String sessionId,
     required String? text,
     bool awaitSelection = false,
+    bool input = false,
   }) {
     this.sessionId = sessionId;
+    _input = input;
     // 新选区结束旧请求，避免后台继续消耗连接；模式回到翻译。
     _cancelTranslation();
     mode = TextMode.translate;
@@ -152,7 +165,8 @@ class SelectionSession extends ChangeNotifier {
 
     final generation = _generation;
     final activeProvider = _activeProvider = provider;
-    final activeLanguage = _activeLanguage = language;
+    // 输入翻译使用独立的语言方向，其余入口使用全局翻译方向（#99）。
+    final activeLanguage = _activeLanguage = _input ? inputLanguage : language;
     var source = snapshot.sourceText;
     snapshot = TranslationSnapshot(
       phase: TranslationPhase.translating,

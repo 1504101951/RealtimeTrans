@@ -29,6 +29,30 @@ class RecordingProvider implements TranslationProvider {
 
 void main() {
   final language = LanguageDirection(primaryCode: 'zh-CN', secondaryCode: 'en');
+  test('输入翻译使用独立语言方向，其余入口使用全局方向（#99）', () async {
+    // 边界：原文识别为英文；全局主要语言为中文时目标为中文，输入翻译主要语言为英文、次要为日文时目标为日文。
+    final provider = RecordingProvider();
+    final session = SelectionSession(
+      detectLanguage: (_) async => 'en',
+      provider: provider,
+      language: const LanguageDirection(
+        primaryCode: 'zh-CN',
+        secondaryCode: 'en',
+      ),
+      inputLanguage: const LanguageDirection(
+        primaryCode: 'en',
+        secondaryCode: 'ja',
+      ),
+    );
+    addTearDown(session.dispose);
+    session.begin(sessionId: 'global', text: 'Hello');
+    await session.activate();
+    expect(provider.requests.last.targetLanguage, 'zh-CN');
+    session.begin(sessionId: 'input', text: 'Hello', input: true);
+    await session.activate();
+    expect(provider.requests.last.targetLanguage, 'ja');
+  });
+
   test('卡片服务菜单：切换服务只影响本卡片，润色时非模型服务明确失败，新选区回到默认服务（#100）', () async {
     // 边界：默认服务译出「默认」，菜单选 model 译出「模型」；润色模式选非模型服务 plain 时失败且不调用默认模型；
     // 新选区开始后 serviceOverride 清空，再翻译使用默认服务。

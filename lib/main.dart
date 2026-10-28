@@ -68,6 +68,7 @@ Future<void> _startApplication(MacosPlatformBridge bridge) async {
     provider: providerForSettings(initial, bridge),
     detectLanguage: bridge.detectLanguage,
     language: initial.direction,
+    inputLanguage: initial.inputDirection,
     lookupDefinition: bridge.lookupDefinition,
   );
   // 实时翻译会话只留在主引擎。原生盖层按快照绘制，不持有服务或密钥。
@@ -86,6 +87,8 @@ Future<void> _startApplication(MacosPlatformBridge bridge) async {
       // dismiss只撤下未展开触发态；已开始翻译继续使用自身冻结的服务和语言快照。
       if (!session.isExpanded) session.dismiss();
       session.language = candidate.direction;
+      // 输入翻译的语言方向与全局翻译隔离，同样只影响下一次翻译（#99）。
+      session.inputLanguage = candidate.inputDirection;
       // providerForSettings在下一次请求前按已提交配置读取对应服务凭据。
       session.provider = providerForSettings(candidate, bridge);
       // 实时翻译之后发送的批次使用新配置，不重译画面上未变化的段落块。

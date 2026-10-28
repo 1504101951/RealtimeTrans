@@ -406,6 +406,46 @@ void main() {
     expect(tester.widget<TextField>(width).controller!.text, isEmpty);
     expect(tester.takeException(), isNull);
   });
+  testWidgets('翻译语言分段：切到输入翻译只修改输入翻译的一组语言，全局不变（#99）', (tester) async {
+    // 边界：全局 zh-CN/en，输入翻译未设置时显示复制的 zh-CN/en；切到「输入翻译」把次要语言改为日本語，
+    // 提交后输入翻译次要语言为 ja，全局次要语言仍为 en。
+    const channel = MethodChannel(ChannelNames.settings);
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    var settings = <String, Object?>{
+      'revision': 0,
+      PreferenceKeys.primaryLanguage: 'zh-CN',
+      PreferenceKeys.secondaryLanguage: 'en',
+    };
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == MethodNames.systemStatus) {
+        return {'accessibility': true};
+      }
+      if (call.method == MethodNames.getSettings) return settings;
+      if (call.method == MethodNames.saveSettings) {
+        final draft = Map<String, Object?>.from(call.arguments as Map)
+          ..remove('credentials');
+        settings = {...draft, 'revision': (settings['revision'] as int) + 1};
+        return settings;
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    await tester.pumpWidget(const SettingsApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('翻译').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('输入翻译').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('English').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('日本語').last);
+    await tester.pumpAndSettle();
+    expect(settings[PreferenceKeys.inputSecondaryLanguage], 'ja');
+    expect(settings[PreferenceKeys.secondaryLanguage], 'en');
+    expect(settings[PreferenceKeys.inputPrimaryLanguage], 'zh-CN');
+    expect(tester.takeException(), isNull);
+  });
   testWidgets('处理提示词：恢复默认、空提示词不能保存，保存后自动提交三种提示词（#100）', (tester) async {
     // 边界：初始润色为自定义值时「恢复默认」可用，点击后回到默认值且按钮禁用；
     // 纠错清空时显示「提示词不能为空。」且「保存」禁用；填回后保存，提交的偏好含三种提示词。

@@ -14,6 +14,8 @@ class AppSettings {
   AppSettings({
     required this.primaryLanguage,
     this.secondaryLanguage,
+    String? inputPrimaryLanguage,
+    String? inputSecondaryLanguage,
     this.automatic = true,
     this.shortcutKeyCode = 17,
     this.shortcutLabel = 'T',
@@ -44,7 +46,12 @@ class AppSettings {
     List<ServiceConfig>? services,
     ScreenshotToolbarPreferences? screenshotToolbar,
     DrawingPreferences? drawing,
-  }) : excludedApps = excludedApps ?? {},
+  }) : // 输入翻译一组未设置过时复制全局两项语言（#99）。
+       inputPrimaryLanguage = inputPrimaryLanguage ?? primaryLanguage,
+       inputSecondaryLanguage = inputPrimaryLanguage == null
+           ? secondaryLanguage
+           : inputSecondaryLanguage,
+       excludedApps = excludedApps ?? {},
        glossary = glossary ?? [],
        assistPrompts = {...defaultAssistPrompts, ...?assistPrompts},
        services = services ?? [],
@@ -56,6 +63,10 @@ class AppSettings {
   ScreenshotToolbarPreferences screenshotToolbar;
   String primaryLanguage;
   String? secondaryLanguage;
+
+  /// 输入翻译快捷键使用的主要/次要语言，与全局翻译隔离（#99）。
+  String inputPrimaryLanguage;
+  String? inputSecondaryLanguage;
   bool automatic;
   int shortcutKeyCode;
   String shortcutLabel;
@@ -146,6 +157,9 @@ class AppSettings {
           map[PreferenceKeys.primaryLanguage] as String? ??
           language.primaryCode,
       secondaryLanguage: map[PreferenceKeys.secondaryLanguage] as String?,
+      inputPrimaryLanguage: map[PreferenceKeys.inputPrimaryLanguage] as String?,
+      inputSecondaryLanguage:
+          map[PreferenceKeys.inputSecondaryLanguage] as String?,
       automatic: map[PreferenceKeys.automatic] as bool? ?? true,
       defaultServiceId:
           map[PreferenceKeys.defaultServiceId] as String? ??
@@ -237,12 +251,18 @@ class AppSettings {
             !services.any((e) => e.id == defaultServiceId)) {
       throw const FormatException('默认翻译服务不存在或配置标识重复。');
     }
-    if (primaryLanguage.isEmpty ||
-        secondaryLanguage != null &&
-            (secondaryLanguage!.isEmpty ||
-                LanguageDirection.normalize(primaryLanguage) ==
-                    LanguageDirection.normalize(secondaryLanguage!))) {
-      throw const FormatException('主要语言和次要语言必须不同。');
+    // 全局翻译与输入翻译两组语言各自满足同一规则（#99）。
+    for (final (primary, secondary) in [
+      (primaryLanguage, secondaryLanguage),
+      (inputPrimaryLanguage, inputSecondaryLanguage),
+    ]) {
+      if (primary.isEmpty ||
+          secondary != null &&
+              (secondary.isEmpty ||
+                  LanguageDirection.normalize(primary) ==
+                      LanguageDirection.normalize(secondary))) {
+        throw const FormatException('主要语言和次要语言必须不同。');
+      }
     }
     // 同一目标语言下同一术语只能有一种译法，否则请求中会出现互相矛盾的要求。
     if (glossary.any((entry) => entry.term.trim().isEmpty) ||
@@ -288,6 +308,8 @@ class AppSettings {
     PreferenceKeys.primaryLanguage: primaryLanguage,
     // 完整偏好字典通过 UserDefaults 覆盖保存；省略未设置项，避免存储不支持的 null。
     PreferenceKeys.secondaryLanguage: ?secondaryLanguage,
+    PreferenceKeys.inputPrimaryLanguage: inputPrimaryLanguage,
+    PreferenceKeys.inputSecondaryLanguage: ?inputSecondaryLanguage,
     PreferenceKeys.automatic: automatic,
     PreferenceKeys.shortcutKeyCode: shortcutKeyCode,
     PreferenceKeys.shortcutLabel: shortcutLabel,
@@ -321,5 +343,11 @@ class AppSettings {
   LanguageDirection get direction => LanguageDirection(
     primaryCode: primaryLanguage,
     secondaryCode: secondaryLanguage,
+  );
+
+  /// 无参数；返回输入翻译快捷键使用的翻译方向规则（#99）。
+  LanguageDirection get inputDirection => LanguageDirection(
+    primaryCode: inputPrimaryLanguage,
+    secondaryCode: inputSecondaryLanguage,
   );
 }

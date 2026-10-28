@@ -72,6 +72,10 @@ abstract final class PreferenceKeys {
 
   static const secondaryLanguage = 'secondaryLanguage';
 
+  /// 输入翻译独立的主要/次要语言；主要语言缺失表示从未设置，读取时取全局两项语言（#99）。
+  static const inputPrimaryLanguage = 'inputPrimaryLanguage';
+  static const inputSecondaryLanguage = 'inputSecondaryLanguage';
+
   static const services = 'services';
 
   static const shortcutKeyCode = 'shortcutKeyCode';
