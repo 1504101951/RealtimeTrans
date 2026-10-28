@@ -8,6 +8,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:translate_app/src/common/constants/screenshot_actions.dart';
+import 'package:translate_app/src/common/constants/preference_keys.dart';
 import 'package:translate_app/src/common/widgets/native_glass.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:translate_app/src/common/constants/screenshot_enums.dart';
@@ -829,6 +831,98 @@ void main() {
     expect(listEquals(copied!, bytes!), isFalse);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 400));
+  });
+
+  testWidgets('贴纸：美化的子级打开贴纸面板，选中后放在选区中央并导出，原生转发 Delete 删除（#103）', (
+    tester,
+  ) async {
+    // 边界：64×64 蓝图、选区为整图；贴纸默认 20×20pt、倍率 1，放在中心 (32,32)；导出中心为红，
+    // Delete 转发后贴纸删除、导出中心恢复蓝色。
+    tester.view.physicalSize = const Size(900, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final directory = Directory.systemTemp.createTempSync('stickers-');
+    addTearDown(() => directory.deleteSync(recursive: true));
+    final bytes = await tester.runAsync(() async {
+      File('${directory.path}/red.png')
+          .writeAsBytesSync(await _solidPng(10, 10, const Color(0xFFFF0000)));
+      return _solidPng(64, 64, _blue);
+    });
+    const channel = MethodChannel('test/screenshot-sticker');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    Uint8List? copied;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case MethodNames.getScreenshot:
+          return {
+            'id': 'shot-sticker',
+            'bytes': bytes,
+            'capturedAt': 0,
+            'width': 64,
+            'height': 64,
+            PreferenceKeys.stickers: [
+              {'id': 'red', 'width': 20.0, 'height': 20.0},
+            ],
+            PreferenceKeys.stickerDirectory: directory.path,
+          };
+        case MethodNames.copyScreenshot:
+          copied = (call.arguments as Map)['bytes'] as Uint8List;
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.ensureVisible(find.byKey(const Key('screenshot-beautify')));
+    await tester.tap(find.byKey(const Key('screenshot-beautify')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key(ScreenshotActions.sticker)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('sticker-cell-red')));
+    // 读取贴纸文件与解码使用真实 IO 和图像线程，交替让出真实时间与推进帧。
+    for (var i = 0; i < 5; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pump();
+    }
+
+    /// 返回复制导出图中心像素的 RGB。
+    Future<(int, int, int)> exportedCenter() async {
+      await tester.ensureVisible(find.byKey(const Key('screenshot-copy')));
+      return (await tester.runAsync(() async {
+        await tester.tap(find.byKey(const Key('screenshot-copy')));
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        final codec = await ui.instantiateImageCodec(copied!);
+        final image = (await codec.getNextFrame()).image;
+        final data = (await image.toByteData(
+          format: ui.ImageByteFormat.rawRgba,
+        ))!;
+        final offset = (32 * image.width + 32) * 4;
+        return (
+          data.getUint8(offset),
+          data.getUint8(offset + 1),
+          data.getUint8(offset + 2),
+        );
+      }))!;
+    }
+
+    expect(await exportedCenter(), (255, 0, 0));
+    await messenger.handlePlatformMessage(
+      channel.name,
+      const StandardMethodCodec().encodeMethodCall(
+        const MethodCall(MethodNames.deleteScreenshotSelection, {
+          'id': 'shot-sticker',
+        }),
+      ),
+      (_) {},
+    );
+    await tester.pump();
+    expect(await exportedCenter(), (0, 0, 255));
+    await tester.pump(const Duration(seconds: 2));
   });
 
   testWidgets('美化行：未开启美化时下拉禁用，应用背景后可用，「无背景」关闭美化（#103）', (tester) async {

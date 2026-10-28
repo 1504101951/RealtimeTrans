@@ -2,6 +2,7 @@ import 'drawing_preferences.dart';
 import '../common/constants/preference_keys.dart';
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui' as ui;
 import 'dart:math' as math;
 
@@ -26,6 +27,8 @@ import 'drawing_style.dart';
 import 'drawing_controls.dart';
 import 'measure_layer.dart';
 import 'box_transform.dart';
+import 'sticker_panel.dart';
+import 'stickers.dart';
 import 'recognized_text_panel.dart';
 import 'screenshot_editor_layout.dart';
 import '../settings/screenshot_toolbar_preferences.dart';
@@ -109,6 +112,13 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
   /// 本次截图的美化参数；null 表示不美化，新截图重置。
   BeautifyStyle? _beautify;
   CaptureTarget _recordingTarget = CaptureTarget.region;
+
+  /// 我的贴纸与其文件目录，随快照与工具栏变更通知更新；目录读取前为 null（#103）。
+  List<StickerEntry> _stickers = const [];
+  String? _stickerDirectory;
+
+  /// 正在拖动的贴纸：控制点与拖动开始时的位置和角度；没有拖动时为 null（#103）。
+  ({BoxHandle handle, BoxFrame start})? _stickerDrag;
 
   /// 「录制选项」的已保存值：开始前倒计时秒数与是否显示鼠标点击，随快照与工具栏变更通知更新（#129）。
   int _recordingDelay = 0;
@@ -270,6 +280,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
             _recordingDelay = map[PreferenceKeys.recordingDelay] as int? ?? 0;
             _recordingShowsClicks =
                 map[PreferenceKeys.recordingShowsClicks] as bool? ?? false;
+            _readStickers(map);
           });
         }
       } else if (call.method == MethodNames.screenshotChanged) {
@@ -283,6 +294,13 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           return;
         }
         _toolbarActions()[args['action']]?.call();
+      } else if (call.method == MethodNames.deleteScreenshotSelection) {
+        // 非激活截图面板的 Delete 由原生转发；只作用于当前捕获，文字输入时留给输入框（#103）。
+        final id = (call.arguments as Map)['id'];
+        if (_capture['id'] == null || _capture['id'] != id || _textInputOpen) {
+          return;
+        }
+        _deleteSelection();
       } else if (call.method == MethodNames.nudgeScreenshotCrop) {
         final args = call.arguments as Map;
         // 非激活截图面板的方向键由原生转发；只作用于当前捕获，文字输入时留给输入框（#106）。
@@ -383,6 +401,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       _recordingDelay = value[PreferenceKeys.recordingDelay] as int? ?? 0;
       _recordingShowsClicks =
           value[PreferenceKeys.recordingShowsClicks] as bool? ?? false;
+      _readStickers(value);
       _drawing = DrawingPreferences.fromMap(
         value[PreferenceKeys.screenshotDrawing] as Map?,
       );
@@ -1342,6 +1361,25 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       _commitText();
       return;
     }
+    // 光标工具先命中贴纸：选中贴纸的控制点与旋转手柄优先，其次最上层贴纸开始移动（#103）。
+    if (_tool == ScreenshotTool.cursor && !_busy) {
+      final sticker = _stickerHandleAt(imagePoint);
+      if (sticker != null) {
+        setState(() {
+          _selectedShapeId = sticker.annotation.id;
+          _selectedTextId = null;
+          _cropSelected = false;
+          _stickerDrag = (
+            handle: sticker.handle,
+            start: BoxFrame(sticker.annotation.bounds, sticker.annotation.rotation),
+          );
+          _dragStart = imagePoint;
+          _dragCurrent = imagePoint;
+          _previewAnnotation = sticker.annotation;
+        });
+        return;
+      }
+    }
     if (_tool == ScreenshotTool.cursor &&
         !_busy &&
         !_textInputOpen &&
@@ -1422,6 +1460,28 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     if (_dragStart == null || _textInputOpen) return;
     setState(() {
       _dragCurrent = imagePoint;
+      final stickerDrag = _stickerDrag;
+      if (stickerDrag != null) {
+        // dragBox 统一移动、缩放与旋转；⇧ 保持比例并按 15° 吸附（#103）。
+        final shift = HardwareKeyboard.instance.isShiftPressed;
+        final frame = dragBox(
+          stickerDrag.start,
+          stickerDrag.handle,
+          from: _dragStart!,
+          to: imagePoint,
+          rules: BoxRules(
+            area: _stickerArea,
+            minSide: CropMetrics.minSide,
+            keepRatio: shift,
+            snapRotation: shift,
+          ),
+        );
+        _previewAnnotation = _previewAnnotation!.copyWith(
+          bounds: frame.rect,
+          rotation: frame.rotation,
+        );
+        return;
+      }
       if (_previewCrop != null) {
         if (_resizeHandle != null) {
           // dragBox 统一处理移动与拉伸；锁定比例时控制点按比例调整，移动不受比例影响（#106）。
@@ -1476,6 +1536,18 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
 
   /// 无参数；结束拖拽并提交裁剪/标注，无返回值。
   void _onDragEnd() {
+    // 贴纸拖动结束时一次写入，进入撤销历史（#103）。
+    if (_stickerDrag != null) {
+      final preview = _previewAnnotation;
+      setState(() {
+        _stickerDrag = null;
+        _dragStart = null;
+        _dragCurrent = null;
+        _previewAnnotation = null;
+      });
+      if (preview != null) _document.updateAnnotation(preview);
+      return;
+    }
     if (_shapeSelecting) {
       _shapeSelecting = false;
       return;
@@ -1656,6 +1728,126 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       }
     }
     return null;
+  }
+
+  /// value 为快照或工具栏变更字典；读取我的贴纸与贴纸目录，无返回值（#103）。
+  void _readStickers(Map<Object?, Object?> value) {
+    _stickers = [
+      for (final entry in value[PreferenceKeys.stickers] as List? ?? [])
+        StickerEntry.fromMap(entry as Map),
+    ];
+    _stickerDirectory = value[PreferenceKeys.stickerDirectory] as String?;
+  }
+
+  /// 无参数；删除选中的标注并取消选中，没有选中时保持原状，无返回值（#103）。
+  void _deleteSelection() {
+    final id = _selectedShapeId;
+    if (id == null) return;
+    setState(() => _selectedShapeId = null);
+    _document.removeAnnotation(id);
+  }
+
+  /// 无参数；贴纸可移动的范围：截图范围，开启美化时为选区向外扩出内边距（#103）。
+  Rect get _stickerArea => switch (_beautify) {
+    final beautify? => _document.cropRect.inflate(
+      beautify.padding * _pixelRatio,
+    ),
+    null => _imageArea,
+  };
+
+  /// point 为源图像素；返回命中的贴纸与控制点：选中贴纸的控制点与旋转手柄优先，其次最上层贴纸内部（移动），
+  /// 未命中为 null（#103）。
+  ({EditAnnotation annotation, BoxHandle handle})? _stickerHandleAt(
+    Offset point,
+  ) {
+    final selected = _styleSelection;
+    if (selected != null && selected.kind == AnnotationKind.sticker) {
+      final handle = hitBoxHandle(
+        BoxFrame(selected.bounds, selected.rotation),
+        point,
+        pad: GlassMetrics.cropHandleHitRadius * _pixelRatio,
+        edgePad: GlassMetrics.cropEdgeHitRadius * _pixelRatio,
+        rotateDistance: StickerMetrics.rotateDistance * _pixelRatio,
+      );
+      if (handle != null) return (annotation: selected, handle: handle);
+    }
+    for (final annotation in _document.annotations.reversed) {
+      if (annotation.kind != AnnotationKind.sticker) continue;
+      final hit = hitBoxHandle(
+        BoxFrame(annotation.bounds, annotation.rotation),
+        point,
+        pad: 0,
+      );
+      if (hit != null) return (annotation: annotation, handle: BoxHandle.move);
+    }
+    return null;
+  }
+
+  /// 无参数；打开贴纸面板：选中我的贴纸则放到截图上，「管理贴纸…」打开设置窗口，返回弹窗关闭的 Future（#103）。
+  Future<void> _openStickerPanel() async {
+    final captureId = _capture['id'];
+    _dialogOpen = true;
+    final choice = await showDialog<StickerChoice>(
+      context: _editorKey.currentContext!,
+      builder: (_) => Dialog(
+        child: StickerPanel(
+          stickers: _stickers,
+          directory: _stickerDirectory!,
+        ),
+      ),
+    );
+    _dialogOpen = false;
+    if (!mounted || captureId != _capture['id']) return;
+    switch (choice) {
+      case PickedSticker(:final entry):
+        await _placeSticker(entry);
+      case ManageStickers():
+        unawaited(
+          widget.channel.invokeMethod<void>(MethodNames.openStickerSettings),
+        );
+      case null:
+        break;
+    }
+  }
+
+  /// entry 为选中的贴纸；按需加载其位图，以默认大小放在选区中央（超出选区时等比缩小），
+  /// 并切到光标工具选中它，返回放置完成的 Future（#103）。
+  Future<void> _placeSticker(StickerEntry entry) async {
+    final id = entry.id;
+    if (!_document.stickerImages.containsKey(id)) {
+      final bytes = await File('$_stickerDirectory/$id.png').readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      codec.dispose();
+      _document.stickerImages[id] = frame.image;
+    }
+    if (!mounted) return;
+    final crop = _document.cropRect;
+    // 默认大小为屏幕点，按像素倍率换算到源图像素。
+    final width = entry.width * _pixelRatio;
+    final height = entry.height * _pixelRatio;
+    final fit = math.min(
+      1.0,
+      math.min(crop.width / width, crop.height / height),
+    );
+    final annotationId = _document.addAnnotation(
+      EditAnnotation(
+        id: '',
+        kind: AnnotationKind.sticker,
+        bounds: Rect.fromCenter(
+          center: crop.center,
+          width: width * fit,
+          height: height * fit,
+        ),
+        stickerId: id,
+      ),
+    );
+    setState(() {
+      _tool = ScreenshotTool.cursor;
+      _selectedShapeId = annotationId;
+      _selectedTextId = null;
+      _cropSelected = false;
+    });
   }
 
   /// bounds 为文本框或裁剪框，point 为源图像素；返回命中的控制点（八角拉伸、框内移动），未命中为 null。
@@ -2119,6 +2311,13 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           }
           // 文字输入中把 ⌘Z 与方向键留给输入框；否则与工具栏共用标注历史。
           if (_textInputOpen) return KeyEventResult.ignored;
+          // Delete 删除选中的标注（#103）。
+          if ((event.logicalKey == LogicalKeyboardKey.delete ||
+                  event.logicalKey == LogicalKeyboardKey.backspace) &&
+              _selectedShapeId != null) {
+            _deleteSelection();
+            return KeyEventResult.handled;
+          }
           // _nudgeCrop 按方向键微调选区；⌘/⌃ 组合与不满足条件时交给后续处理（#106）。
           final direction = _arrowDirections[event.logicalKey];
           final keyboard = HardwareKeyboard.instance;
@@ -2574,6 +2773,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       ScreenshotActions.pin: _document.hasImage ? () => _export('pin') : null,
       ScreenshotActions.save: _document.hasImage ? () => _export('save') : null,
       ScreenshotActions.copy: _document.hasImage ? () => _export('copy') : null,
+      ScreenshotActions.sticker: _document.hasImage ? _openStickerPanel : null,
       ScreenshotActions.ocrCopy: _document.hasImage ? _showRecognizedText : null,
       ScreenshotActions.ocrTranslate: _document.hasImage ? _translateOcr : null,
       ScreenshotActions.close: _close,
@@ -3242,6 +3442,8 @@ class _EditorSurfaceState extends State<_EditorSurface> {
                   CustomPaint(
                     painter: _OverlayPainter(
                       sourceImage: widget.sourceImage,
+                      stickers: widget.document.stickerImages,
+                      pixelRatio: widget.pixelRatio,
                       selectedShape: widget.selectedShape,
                       annotations: widget.document.annotations,
                       previewAnnotation: widget.previewAnnotation,
@@ -3744,6 +3946,8 @@ class _OverlayPainter extends CustomPainter {
     required this.imageSize,
     this.sourceImage,
     this.selectedShape,
+    this.stickers = const {},
+    this.pixelRatio = 1,
   });
 
   final List<EditAnnotation> annotations;
@@ -3751,6 +3955,10 @@ class _OverlayPainter extends CustomPainter {
   final Size imageSize;
   final ui.Image? sourceImage;
   final EditAnnotation? selectedShape;
+
+  /// 贴纸位图（#103）与源图像素对屏幕点的倍率（用于旋转手柄距离）。
+  final Map<String, ui.Image> stickers;
+  final double pixelRatio;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -3773,6 +3981,7 @@ class _OverlayPainter extends CustomPainter {
         annotation,
         sourceImage: sourceImage,
         stepNumber: numbers[annotation.id],
+        stickers: stickers,
       );
     }
     if (previewAnnotation != null) {
@@ -3781,17 +3990,67 @@ class _OverlayPainter extends CustomPainter {
         previewAnnotation!,
         sourceImage: sourceImage,
         stepNumber: numbers.length + 1,
+        stickers: stickers,
       );
     }
-    if (selectedShape != null) {
-      canvas.drawRect(
-        selectedShape!.bounds.inflate(2),
-        Paint()
-          ..color = const Color(0xFF007AFF)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1 / scaleX,
-      );
+    // 拖动中的贴纸以预览为准，选中框跟随预览（#103）。
+    final selected = previewAnnotation?.id == selectedShape?.id
+        ? previewAnnotation
+        : selectedShape;
+    if (selected != null) {
+      final stroke = Paint()
+        ..color = const Color(0xFF007AFF)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1 / scaleX;
+      if (selected.kind == AnnotationKind.sticker) {
+        _paintStickerSelection(canvas, selected, stroke, scaleX);
+      } else {
+        canvas.drawRect(selected.bounds.inflate(2), stroke);
+      }
     }
+    canvas.restore();
+  }
+
+  /// canvas 为源图坐标画布，sticker 为选中贴纸，stroke 为 1pt 蓝色描边，scale 为源图到屏幕的缩放；
+  /// 在贴纸旋转后的坐标系中画外框、八个控制点与上方旋转手柄（#103）。
+  void _paintStickerSelection(
+    Canvas canvas,
+    EditAnnotation sticker,
+    Paint stroke,
+    double scale,
+  ) {
+    final rect = sticker.bounds;
+    final center = rect.center;
+    // 控制点 8pt、旋转手柄直径 10pt，按屏幕尺寸换算到源图坐标。
+    final handle = GlassMetrics.cropHandle / scale;
+    final knob = StickerMetrics.rotateHandle / scale;
+    final knobCenter = Offset(
+      center.dx,
+      rect.top - StickerMetrics.rotateDistance * pixelRatio,
+    );
+    final fill = Paint()..color = const Color(0xFFFFFFFF);
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(sticker.rotation);
+    canvas.translate(-center.dx, -center.dy);
+    canvas.drawRect(rect, stroke);
+    for (final point in [
+      rect.topLeft,
+      rect.topCenter,
+      rect.topRight,
+      rect.centerRight,
+      rect.bottomRight,
+      rect.bottomCenter,
+      rect.bottomLeft,
+      rect.centerLeft,
+    ]) {
+      final square = Rect.fromCenter(center: point, width: handle, height: handle);
+      canvas.drawRect(square, fill);
+      canvas.drawRect(square, stroke);
+    }
+    canvas.drawLine(rect.topCenter, knobCenter, stroke);
+    canvas.drawCircle(knobCenter, knob / 2, fill);
+    canvas.drawCircle(knobCenter, knob / 2, stroke);
     canvas.restore();
   }
 

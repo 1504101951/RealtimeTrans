@@ -124,6 +124,12 @@ abstract final class MethodNames {
   /// 返回贴纸目录路径，文件为「目录/id.png」（#103）。
   static const stickerDirectory = 'stickerDirectory';
 
+  /// 截图贴纸面板「管理贴纸…」打开设置窗口（#103）。
+  static const openStickerSettings = 'openStickerSettings';
+
+  /// 非激活截图面板的 Delete 键由原生转发，删除当前选中的标注；参数 id（#103）。
+  static const deleteScreenshotSelection = 'deleteScreenshotSelection';
+
   static const permissionStatusChanged = 'permissionStatusChanged';
 
   static const permissionWizardStatus = 'permissionWizardStatus';

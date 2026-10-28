@@ -285,10 +285,12 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         return value
     }
 
-    /// 无参数；返回已保存的工具栏配置、确认截图动作与录制选项子集，缺省值由Dart领域对象提供。
+    /// 无参数；返回已保存的工具栏配置、确认截图动作、录制选项与我的贴纸子集，以及贴纸目录路径（#103）；
+    /// 缺省值由Dart领域对象提供。
     private func toolbarPreferences() -> [String: Any] {
         let preferences = AppPreferences.current
-        return preferences.filter { [AppConstants.screenshotToolbarOrderKey, AppConstants.screenshotToolbarChildrenKey, AppConstants.screenshotToolbarShortcutsKey, AppConstants.screenshotToolbarHiddenKey, AppConstants.screenshotDrawingKey, AppConstants.screenshotConfirmActionKey, AppConstants.recordingDelayKey, AppConstants.recordingShowsClicksKey].contains($0.key) }
+        return preferences.filter { [AppConstants.screenshotToolbarOrderKey, AppConstants.screenshotToolbarChildrenKey, AppConstants.screenshotToolbarShortcutsKey, AppConstants.screenshotToolbarHiddenKey, AppConstants.screenshotDrawingKey, AppConstants.screenshotConfirmActionKey, AppConstants.recordingDelayKey, AppConstants.recordingShowsClicksKey, AppConstants.stickersKey].contains($0.key) }
+            .merging([AppConstants.stickerDirectoryKey: AppConstants.stickersURL.path]) { current, _ in current }
     }
 
     /// 无参数；只广播工具偏好，保留图像与标注，关闭窗口时无订阅者。
@@ -408,6 +410,10 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             // brushCursor按直径与颜色绘制圆点；color缺省表示马赛克画笔的空心圆。
             Self.brushCursor(diameter: CGFloat(diameter), argb: (args["color"] as? NSNumber)?.uint32Value).set()
             hasNativeCursor = true
+            result(nil)
+        case AppConstants.openStickerSettingsMethod:
+            // 「管理贴纸…」打开设置窗口（#103）。
+            MainActor.assumeIsolated { StatusBarController.shared.showSettings?() }
             result(nil)
         case AppConstants.saveDrawingPreferencesMethod:
             // routeWindowRequest把绘图偏好交给唯一设置提交入口。
@@ -803,6 +809,15 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
                 "shift": event.modifierFlags.contains(.shift),
                 "option": event.modifierFlags.contains(.option),
             ])
+            return true
+        }
+        // Delete 删除选中的标注（贴纸等）；非激活面板收不到该键，转发给截图引擎（#103）。
+        if AppConstants.deleteKeyCodes.contains(event.keyCode),
+           event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+           let id = captureId {
+            if !event.isARepeat {
+                channel?.invokeMethod(AppConstants.deleteScreenshotSelectionMethod, arguments: ["id": id])
+            }
             return true
         }
         // 非激活面板不保证收到Flutter键盘事件；直接派发语义动作，禁止重放字符。

@@ -184,9 +184,10 @@ void main() {
     );
   });
 
-  test('默认结构为截图包含录制、滚动长截图、取色与标尺；旧配置读取后回到同一结构', () {
+  test('默认结构为截图包含录制、滚动长截图、取色与标尺，美化包含贴纸；旧配置读取后回到同一结构', () {
     // 作用：升级前只保存了一级顺序的配置，读取后不因缺少子级功能而校验失败。
-    // 边界：旧配置没有父子结构键，也不含录制、滚动长截图、取色与标尺；四者按默认顺序回到截图之下（#111），其余一级顺序不变。
+    // 边界：旧配置没有父子结构键，也不含录制、滚动长截图、取色、标尺与贴纸；前四者按默认顺序回到截图之下（#111），
+    // 贴纸回到美化之下（#103），其余一级顺序不变。
     final defaults = ScreenshotToolbarPreferences();
     expect(defaults.children, {
       ScreenshotActions.crop: [
@@ -195,6 +196,7 @@ void main() {
         ScreenshotActions.eyedropper,
         ScreenshotActions.ruler,
       ],
+      ScreenshotActions.beautify: [ScreenshotActions.sticker],
     });
     expect(defaults.parentOf(ScreenshotActions.record), ScreenshotActions.crop);
     expect(defaults.parentOf(ScreenshotActions.crop), isNull);

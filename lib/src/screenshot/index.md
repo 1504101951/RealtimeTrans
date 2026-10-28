@@ -18,3 +18,4 @@
 12. [measure_layer.dart](measure_layer.dart)：显示取色标签与标尺测量线，并提供色值与测量文字格式化；不进入导出与撤销。
 13. [box_transform.dart](box_transform.dart)：可拖动矩形的控制点命中与移动、拉伸、比例、旋转变换，裁剪框、文字框与贴纸共用。
 14. [stickers.dart](stickers.dart)：我的贴纸条目（id 与默认大小）及按原图比例计算初始默认大小。
+15. [sticker_panel.dart](sticker_panel.dart)：截图贴纸面板，列出我的贴纸并返回选中的贴纸或管理入口。

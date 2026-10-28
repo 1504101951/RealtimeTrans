@@ -24,6 +24,7 @@ abstract final class ScreenshotActions {
   static const ruler = 'screenshot-tool-ruler';
   static const beautify = 'screenshot-beautify';
   static const ratio = 'screenshot-ratio';
+  static const sticker = 'screenshot-sticker';
   static const pin = 'screenshot-pin';
   static const save = 'screenshot-save';
   static const copy = 'screenshot-copy';
@@ -55,8 +56,10 @@ abstract final class ScreenshotActions {
     // 取色复制指针处源像素色值，标尺测量两点像素距离；均不产生标注（#111）。
     eyedropper: (icon: Icons.colorize, hostsChildren: true),
     ruler: (icon: Icons.straighten, hostsChildren: true),
-    // 美化展开自己的设置行，不承载子级（#103）。
-    beautify: (icon: Icons.auto_awesome_outlined, hostsChildren: false),
+    // 美化展开自己的设置行，并承载子级，「贴纸」默认是其子级（#103）。
+    beautify: (icon: Icons.auto_awesome_outlined, hostsChildren: true),
+    // 贴纸打开贴纸面板，把我的贴纸或 Emoji 放到截图上（#103）。
+    sticker: (icon: Icons.emoji_emotions_outlined, hostsChildren: false),
     // 比例展开比例行，锁定后续框选与调整的宽高比（#106）。
     ratio: (icon: Icons.aspect_ratio, hostsChildren: false),
     pin: (icon: Icons.push_pin_outlined, hostsChildren: false),
@@ -72,6 +75,7 @@ abstract final class ScreenshotActions {
   /// 取色与标尺默认放在截图的子级行，一级保持 17 项、不超出 640pt 工具栏（#111）。
   static const defaultChildren = <String, List<String>>{
     crop: [record, scrolling, eyedropper, ruler],
+    beautify: [sticker],
   };
 
   /// 可拼接功能的图标；键的顺序即默认顺序。
@@ -105,6 +109,7 @@ abstract final class ScreenshotActions {
     eyedropper: '取色',
     ruler: '标尺',
     beautify: '美化',
+    sticker: '贴纸',
     ratio: '比例',
     pin: '贴图',
     save: '保存',

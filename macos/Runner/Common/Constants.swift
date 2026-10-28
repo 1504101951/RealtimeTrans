@@ -171,6 +171,11 @@ enum AppConstants {
     static let saveStickerMethod = "saveSticker"
     static let deleteStickerMethod = "deleteSticker"
     static let stickerDirectoryMethod = "stickerDirectory"
+    /// 截图贴纸面板打开设置、Delete 键删除选中标注的协议值（#103），与Dart常量同步。
+    static let openStickerSettingsMethod = "openStickerSettings"
+    static let deleteScreenshotSelectionMethod = "deleteScreenshotSelection"
+    /// Delete（kVK_Delete）与向前删除（kVK_ForwardDelete）的硬件键码（#103）。
+    static let deleteKeyCodes: Set<UInt16> = [51, 117]
     /// 截图快照中的贴纸列表与贴纸目录键（#103），与Dart常量同步。
     static let stickersKey = "stickers"
     static let stickerDirectoryKey = "stickerDirectory"
