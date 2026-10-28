@@ -8,6 +8,7 @@ import '../translation/glossary.dart';
 import '../translation/language_direction.dart';
 import 'service_config.dart';
 import 'screenshot_toolbar_preferences.dart';
+import '../screenshot/stickers.dart';
 
 /// Dart 持有完整偏好；平台只负责存储及热键、登录项等系统副作用。
 class AppSettings {
@@ -42,6 +43,7 @@ class AppSettings {
     Map<String, String>? excludedApps,
     List<GlossaryEntry>? glossary,
     Map<TextMode, String>? assistPrompts,
+    List<StickerEntry>? stickers,
     this.defaultServiceId = ServiceConfig.builtinId,
     List<ServiceConfig>? services,
     ScreenshotToolbarPreferences? screenshotToolbar,
@@ -54,6 +56,7 @@ class AppSettings {
        excludedApps = excludedApps ?? {},
        glossary = glossary ?? [],
        assistPrompts = {...defaultAssistPrompts, ...?assistPrompts},
+       stickers = stickers ?? [],
        services = services ?? [],
        screenshotToolbar = screenshotToolbar ?? ScreenshotToolbarPreferences(),
        drawing = drawing ?? DrawingPreferences();
@@ -119,6 +122,9 @@ class AppSettings {
 
   /// 润色、纠错、解释的系统提示词，所有模型服务共用；缺省为 defaultAssistPrompts（#100）。
   final Map<TextMode, String> assistPrompts;
+
+  /// 我的贴纸，按添加顺序；文件在 App 数据目录 Stickers/（#103）。
+  final List<StickerEntry> stickers;
   String defaultServiceId;
   final List<ServiceConfig> services;
 
@@ -218,12 +224,19 @@ class AppSettings {
         for (final entry in PreferenceKeys.assistPrompts.entries)
           if (map[entry.value] case final String prompt) entry.key: prompt,
       },
+      stickers: [
+        for (final entry in map[PreferenceKeys.stickers] as List? ?? [])
+          StickerEntry.fromMap(entry as Map),
+      ],
     );
   }
 
   /// 无参数；校验可执行的语言方向及系统快捷键，非法配置抛 FormatException。
   void validate() {
     screenshotToolbar.validate();
+    for (final sticker in stickers) {
+      sticker.validate();
+    }
     // 处理提示词为空时模型无从执行（#100）。
     if (assistPrompts.values.any((prompt) => prompt.trim().isEmpty)) {
       throw const FormatException('处理提示词不能为空。');
@@ -337,6 +350,7 @@ class AppSettings {
     PreferenceKeys.glossary: [for (final entry in glossary) entry.toMap()],
     for (final entry in PreferenceKeys.assistPrompts.entries)
       entry.value: assistPrompts[entry.key]!,
+    PreferenceKeys.stickers: [for (final sticker in stickers) sticker.toMap()],
   };
 
   /// 无参数；返回当前主要/次要语言决定的翻译方向规则。

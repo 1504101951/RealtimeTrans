@@ -769,6 +769,22 @@ class RunnerTests: XCTestCase {
         XCTAssertEqual(response as? String, "输入已结束，未替换原文。")
     }
 
+    /// 无参数；贴纸导入时长边超过 1024 像素按原比例缩小，不超过时原样返回，无返回值（#103）。
+    func testStickerImageDownscalesLongSide() throws {
+        // makeImage 生成指定尺寸的透明位图。
+        func makeImage(_ width: Int, _ height: Int) throws -> CGImage {
+            let context = try XCTUnwrap(CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            return try XCTUnwrap(context.makeImage())
+        }
+        // 边界：2048×1024 缩为 1024×512；正好 1024 的长边与更小的图不变。
+        let wide = try StickerImage.downscaled(makeImage(2048, 1024), maxPixels: 1024)
+        XCTAssertEqual([wide.width, wide.height], [1024, 512])
+        let exact = try StickerImage.downscaled(makeImage(600, 1024), maxPixels: 1024)
+        XCTAssertEqual([exact.width, exact.height], [600, 1024])
+    }
+
     /// 无参数；失败气泡放在锚点下方 8pt，下方放不下放上方 8pt，左对齐并限制在可用区水平范围内，无返回值（#99）。
     func testInputFailureBubbleFrameAvoidsAnchor() {
         let visible = NSRect(x: 0, y: 0, width: 400, height: 300)

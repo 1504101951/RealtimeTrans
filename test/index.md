@@ -20,7 +20,7 @@ Dart业务逻辑和Flutter界面行为回归测试。
 16. [screenshot_translation_test.dart](screenshot_translation_test.dart)：验证截图文本翻译、捕获失效与历史写入。
 17. [selection_history_test.dart](selection_history_test.dart)：验证选区翻译成功、失败和取消时的历史记录边界，以及输入翻译不显示卡片、替换成功结束会话与未替换原因交给失败气泡。
 18. [selection_session_test.dart](selection_session_test.dart)：验证选区翻译生命周期、取消和状态变化，以及卡片服务菜单只影响本卡片、非模型服务的润色失败、输入翻译使用独立语言方向。
-19. [settings_app_test.dart](settings_app_test.dart)：验证设置页面交互、服务显示、术语表增删改、处理提示词的恢复默认与空值校验、翻译语言分段只改输入翻译一组、确认截图动作、长截图滚动方式及配置更新。
+19. [settings_app_test.dart](settings_app_test.dart)：验证设置页面交互、服务显示、术语表增删改、处理提示词的恢复默认与空值校验、翻译语言分段只改输入翻译一组、贴纸添加与删除、确认截图动作、长截图滚动方式及配置更新。
 20. [settings_autosave_test.dart](settings_autosave_test.dart)：验证后台自动保存的串行、冲突和失败处理。
 21. [settings_spec_test.dart](settings_spec_test.dart)：验证设置界面是否符合数值、密度与交互规格，含权限卡片下方的离线翻译语言入口。
 22. [settings_test.dart](settings_test.dart)：验证设置数据往返与配置校验，含模型服务 API Key 可留空、处理提示词的默认值和空值拒绝，以及输入翻译语言的复制、隔离与往返。
@@ -49,4 +49,4 @@ Dart业务逻辑和Flutter界面行为回归测试。
 44. [screenshot_measure_confirm_test.dart](screenshot_measure_confirm_test.dart)：验证截图编辑器取色复制源像素色值、标尺测量与不进入导出，以及确认截图动作。
 45. [dictionary_definition_test.dart](dictionary_definition_test.dart)：验证词典释义按词条与音标、词性、义项、例句及分节标题拆行，汉语词典与未识别格式保留原文。
 46. [box_transform_test.dart](box_transform_test.dart)：验证可拖动矩形的命中优先级、旋转后命中、移动限制、自由与比例拉伸、旋转吸附与旋转后拉伸保持对角。
-47. [sticker_test.dart](sticker_test.dart)：按像素验证贴纸位图按范围绘制、旋转后的占位，以及开启美化时可画在背景留白区、不美化时裁到截图范围。
+47. [sticker_test.dart](sticker_test.dart)：按像素验证贴纸位图按范围绘制、旋转后的占位，开启美化时可画在背景留白区、不美化时裁到截图范围，以及贴纸默认大小的计算、往返与校验。

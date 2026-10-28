@@ -266,6 +266,47 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
                 }
                 result(url.path)
             }
+        case AppConstants.importStickerImageMethod:
+            // 选择图片后取首帧、长边超过上限时按比例缩小并编码为 PNG，交给上传框设定默认大小（#103）。
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.png, .jpeg, .gif, .heic, .webP]
+            panel.allowsMultipleSelection = false
+            panel.prompt = "添加贴纸"
+            panel.begin { response in
+                guard response == .OK, let url = panel.url else { result(nil); return }
+                do {
+                    let image = try StickerImage.normalized(url: url)
+                    result([
+                        "bytes": FlutterStandardTypedData(bytes: try PNGEncoding.data(image)),
+                        "width": image.width,
+                        "height": image.height,
+                    ])
+                } catch {
+                    result(FlutterError(code: AppConstants.badArgsError, message: error.localizedDescription, details: nil))
+                }
+            }
+        case AppConstants.saveStickerMethod:
+            guard let id = args["id"] as? String, let bytes = args["bytes"] as? FlutterStandardTypedData else {
+                result(FlutterError(code: AppConstants.badArgsError, message: "保存贴纸需要 id/bytes", details: nil)); return
+            }
+            do {
+                // 贴纸目录在首次保存时创建；文件名即贴纸 id。
+                try FileManager.default.createDirectory(at: AppConstants.stickersURL, withIntermediateDirectories: true)
+                let url = AppConstants.stickersURL.appendingPathComponent("\(id).png")
+                try bytes.data.write(to: url, options: .atomic)
+                result(url.path)
+            } catch {
+                result(FlutterError(code: AppConstants.badArgsError, message: error.localizedDescription, details: nil))
+            }
+        case AppConstants.stickerDirectoryMethod:
+            // 设置页按目录与 id 显示缩略图（#103）。
+            result(AppConstants.stickersURL.path)
+        case AppConstants.deleteStickerMethod:
+            guard let id = args["id"] as? String else {
+                result(FlutterError(code: AppConstants.badArgsError, message: "删除贴纸需要 id", details: nil)); return
+            }
+            try? FileManager.default.removeItem(at: AppConstants.stickersURL.appendingPathComponent("\(id).png"))
+            result(nil)
         case AppConstants.applySettingsMethod:
             guard let settings = args["settings"] as? [String: Any],
                   let credentials = args["credentials"] as? [String: Any] else {

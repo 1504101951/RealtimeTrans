@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:io';
+
 import '../common/constants/glass_metrics.dart';
+import '../common/constants/drawing_metrics.dart';
 import '../common/constants/appearance_modes.dart';
 import '../common/constants/method_names.dart';
 import '../common/constants/channel_names.dart';
@@ -15,6 +19,8 @@ import '../common/widgets/native_glass.dart';
 
 import 'app_settings.dart';
 import 'assist_prompt_editor.dart';
+import 'sticker_upload_dialog.dart';
+import '../screenshot/stickers.dart';
 import 'glossary_editor.dart';
 import 'mcp_platforms.dart';
 import 'mcp_settings_page.dart';
@@ -86,6 +92,57 @@ class _SettingsPageState extends State<_SettingsPage>
       if (call.method == MethodNames.refreshSettings) await _load();
     });
     _load();
+    // 贴纸缩略图按「目录/id.png」读取（#103）。
+    _channel.invokeMethod<String>(MethodNames.stickerDirectory).then((path) {
+      if (mounted) setState(() => _stickerDirectory = path);
+    });
+  }
+
+  /// 我的贴纸所在目录；读取完成前为 null（#103）。
+  String? _stickerDirectory;
+
+  /// 无参数；选择图片并在上传框设定默认大小后写入贴纸文件，再把贴纸加入设置并自动保存；
+  /// 任一步取消则不添加，返回结束的 Future（#103）。
+  Future<void> _addSticker() async {
+    final picked = await _channel.invokeMapMethod<String, Object?>(
+      MethodNames.importStickerImage,
+    );
+    if (picked == null || !mounted) return;
+    final bytes = picked['bytes'] as Uint8List;
+    final size = await showDialog<(double, double)>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => StickerUploadDialog(
+        bytes: bytes,
+        pixelWidth: picked['width'] as int,
+        pixelHeight: picked['height'] as int,
+      ),
+    );
+    if (size == null || !mounted) return;
+    final id = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    // saveSticker 先写文件，设置中只记录 id 与默认大小。
+    await _channel.invokeMethod<String>(MethodNames.saveSticker, {
+      'id': id,
+      'bytes': bytes,
+    });
+    if (!mounted) return;
+    _edit(
+      () => _settings!.stickers.add(
+        StickerEntry(id: id, width: size.$1, height: size.$2),
+      ),
+    );
+  }
+
+  /// sticker 为要删除的贴纸；从设置中移除并自动保存，同时删除贴纸文件，无返回值（#103）。
+  void _removeSticker(StickerEntry sticker) {
+    _edit(
+      () => _settings!.stickers.removeWhere((item) => item.id == sticker.id),
+    );
+    unawaited(
+      _channel.invokeMethod<void>(MethodNames.deleteSticker, {
+        'id': sticker.id,
+      }),
+    );
   }
 
   /// 无参数；解除引擎内的回调和生命周期监听，无返回值。
@@ -1004,6 +1061,49 @@ class _SettingsPageState extends State<_SettingsPage>
                       ),
                     ],
                   ),
+                  // 我的贴纸：缩略图、悬停删除与添加图片（#103）。
+                  NativeGlassGroup(
+                    children: [
+                      const Text(
+                        '贴纸',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 8),
+                      if (settings.stickers.isEmpty)
+                        Text(
+                          '还没有贴纸',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        )
+                      else
+                        Wrap(
+                          spacing: StickerMetrics.thumbnailGap,
+                          runSpacing: StickerMetrics.thumbnailGap,
+                          children: [
+                            for (final sticker in settings.stickers)
+                              _StickerThumbnail(
+                                key: ValueKey('sticker-${sticker.id}'),
+                                path: _stickerDirectory == null
+                                    ? null
+                                    : '$_stickerDirectory/${sticker.id}.png',
+                                onDelete: _recording
+                                    ? null
+                                    : () => _removeSticker(sticker),
+                              ),
+                          ],
+                        ),
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: NativeGlassSurface(
+                          material: true,
+                          child: TextButton(
+                            onPressed: _recording ? null : _addSticker,
+                            child: const Text('添加图片…'),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                   NativeGlassGroup(
                     children: [
                       ExpansionTile(
@@ -1081,4 +1181,71 @@ class _SettingsPageState extends State<_SettingsPage>
       ),
     );
   }
+}
+
+/// 设置页的一张贴纸缩略图：48×48pt、圆角 6pt，悬停时右上角显示删除按钮（#103）。
+class _StickerThumbnail extends StatefulWidget {
+  /// path 为贴纸文件路径（目录未读取时为 null），onDelete 为删除动作（为空时禁用）。
+  const _StickerThumbnail({
+    super.key,
+    required this.path,
+    required this.onDelete,
+  });
+  final String? path;
+  final VoidCallback? onDelete;
+
+  /// 无参数；返回持有悬停状态的状态。
+  @override
+  State<_StickerThumbnail> createState() => _StickerThumbnailState();
+}
+
+/// 持有悬停状态，悬停时显示删除按钮。
+class _StickerThumbnailState extends State<_StickerThumbnail> {
+  bool _hovered = false;
+
+  /// context 为构建上下文；返回缩略图与悬停时的删除按钮。
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    onEnter: (_) => setState(() => _hovered = true),
+    onExit: (_) => setState(() => _hovered = false),
+    child: SizedBox.square(
+      dimension: StickerMetrics.thumbnail,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(StickerMetrics.cellRadius),
+              child: widget.path == null
+                  ? const SizedBox()
+                  : Image.file(File(widget.path!), fit: BoxFit.contain),
+            ),
+          ),
+          if (_hovered)
+            Positioned(
+              top: 0,
+              right: 0,
+              child: Tooltip(
+                message: '删除贴纸',
+                child: InkWell(
+                  onTap: widget.onDelete,
+                  child: Container(
+                    width: 16,
+                    height: 16,
+                    decoration: const BoxDecoration(
+                      color: Color(0x99000000),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.close,
+                      size: 12,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
 }

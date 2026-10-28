@@ -120,3 +120,27 @@ abstract final class CropMetrics {
   static const labelRadius = 4.0;
   static const labelBackground = Color(0x99000000);
 }
+
+/// 截图贴纸的数值（#103），对应样式Spec #67「截图贴纸」；长度单位为屏幕点。
+abstract final class StickerMetrics {
+  /// 我的贴纸默认大小的长边上限，与 Emoji 贴纸的默认长边。
+  static const maxDefaultSize = 512.0;
+  static const emojiDefaultSize = 96.0;
+
+  /// 贴纸面板格子边长、圆角、每行格数与间距；设置页缩略图边长与间距。
+  static const panelCell = 40.0;
+  static const cellRadius = 6.0;
+  static const panelColumns = 6;
+  static const panelGap = 4.0;
+  static const thumbnail = 48.0;
+  static const thumbnailGap = 8.0;
+
+  /// 上传框预览区尺寸与棋盘格边长。
+  static const previewWidth = 480.0;
+  static const previewHeight = 320.0;
+  static const checker = 12.0;
+
+  /// 旋转手柄距上边的距离与直径。
+  static const rotateDistance = 20.0;
+  static const rotateHandle = 10.0;
+}

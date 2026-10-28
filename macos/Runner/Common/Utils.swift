@@ -181,3 +181,36 @@ enum CaptureGeometry {
         return nil
     }
 }
+
+/// 贴纸导入：读取图片首帧，长边超过上限时按原比例缩小（#103）。
+enum StickerImage {
+    /// 无法读取图片时的用户可读错误。
+    struct Unreadable: LocalizedError {
+        var errorDescription: String? { "无法读取这张图片，请换一张 png、jpg、gif、heic 或 webp 图片。" }
+    }
+
+    /// url 为用户选择的图片文件；返回首帧（GIF 取第一帧），长边不超过 AppConstants.stickerMaxPixels，读取失败抛 Unreadable。
+    static func normalized(url: URL) throws -> CGImage {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw Unreadable() }
+        return try downscaled(image, maxPixels: AppConstants.stickerMaxPixels)
+    }
+
+    /// image 为原图，maxPixels 为长边上限；长边不超过上限时原样返回，否则按比例缩小，绘制失败抛 Unreadable。
+    static func downscaled(_ image: CGImage, maxPixels: Int) throws -> CGImage {
+        let long = max(image.width, image.height)
+        guard long > maxPixels else { return image }
+        let scale = Double(maxPixels) / Double(long)
+        let width = max(1, Int((Double(image.width) * scale).rounded()))
+        let height = max(1, Int((Double(image.height) * scale).rounded()))
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { throw Unreadable() }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let scaled = context.makeImage() else { throw Unreadable() }
+        return scaled
+    }
+}

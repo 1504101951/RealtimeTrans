@@ -115,6 +115,15 @@ abstract final class MethodNames {
   /// 设置页打开「系统设置 → 通用 → 语言与地区」，用户在其中下载离线翻译语言（#98）。
   static const openTranslationLanguages = 'openTranslationLanguages';
 
+  /// 贴纸库（#103）：选择并规范化图片（返回 bytes、width、height，取消为 null）、
+  /// 写入贴纸文件（参数 id、bytes，返回文件路径）、删除贴纸文件（参数 id）。
+  static const importStickerImage = 'importStickerImage';
+  static const saveSticker = 'saveSticker';
+  static const deleteSticker = 'deleteSticker';
+
+  /// 返回贴纸目录路径，文件为「目录/id.png」（#103）。
+  static const stickerDirectory = 'stickerDirectory';
+
   static const permissionStatusChanged = 'permissionStatusChanged';
 
   static const permissionWizardStatus = 'permissionWizardStatus';

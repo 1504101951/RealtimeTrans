@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:translate_app/src/common/constants/screenshot_enums.dart';
 import 'package:translate_app/src/screenshot/beautify.dart';
 import 'package:translate_app/src/screenshot/edit_document.dart';
+import 'package:translate_app/src/screenshot/stickers.dart';
+import 'package:translate_app/src/settings/app_settings.dart';
 
 /// width/height 为像素尺寸，color 为颜色；返回纯色图像。
 Future<ui.Image> _solid(int width, int height, Color color) async {
@@ -87,5 +89,26 @@ void main() {
     final plain = await _decode(await doc.renderPng());
     expect((plain.$1, plain.$2), (48, 48));
     expect(_pixel(plain, 2, 2), red);
+  });
+
+  test('贴纸默认大小：长边取原图与 512pt 的较小值并保持比例；设置往返与校验（#103）', () {
+    // 边界：1000×500 → 512×256；300×200 不放大；长边 513pt 或宽为 0 时校验失败。
+    expect(initialStickerSize(1000, 500), (512.0, 256.0));
+    expect(initialStickerSize(300, 200), (300.0, 200.0));
+    final settings = AppSettings(primaryLanguage: 'zh-CN')
+      ..stickers.add(const StickerEntry(id: 'a', width: 120, height: 60));
+    final restored = AppSettings.fromMap(settings.toMap());
+    expect(restored.stickers.single.toMap(), {
+      'id': 'a',
+      'width': 120.0,
+      'height': 60.0,
+    });
+    expect(restored.validate, returnsNormally);
+    restored.stickers.add(const StickerEntry(id: 'b', width: 513, height: 10));
+    expect(restored.validate, throwsFormatException);
+    restored.stickers
+      ..removeLast()
+      ..add(const StickerEntry(id: 'c', width: 0, height: 10));
+    expect(restored.validate, throwsFormatException);
   });
 }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:translate_app/src/common/constants/error_codes.dart';
 import 'package:translate_app/src/common/widgets/native_glass.dart';
@@ -10,6 +11,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:translate_app/src/settings/settings_app.dart';
+import 'package:translate_app/src/settings/sticker_upload_dialog.dart';
+import 'package:flutter/gestures.dart';
 
 /// 无参数；验证真实表单在菜单刷新时保留草稿，并阻止过期设置覆盖。
 void main() {
@@ -406,6 +409,88 @@ void main() {
     expect(tester.widget<TextField>(width).controller!.text, isEmpty);
     expect(tester.takeException(), isNull);
   });
+  testWidgets('贴纸：添加时按原图比例给出默认大小，拖角缩小后保存；删除移除设置与文件（#103）', (tester) async {
+    // 边界：1000×500 的图默认 512×256pt；把右下角拖到预览中心右 50pt、下 10pt 处，宽度决定大小，长边变为
+    // 100/预览比例 ≈ 173pt（短于 512 但大于 16）；提交的 stickers 宽高与说明一致；删除后列表为空并请求删除文件。
+    final png = await tester.runAsync(() async {
+      final recorder = ui.PictureRecorder();
+      Canvas(recorder).drawColor(const Color(0xFFFF0000), BlendMode.src);
+      final image = await recorder.endRecording().toImage(1000, 500);
+      return (await image.toByteData(format: ui.ImageByteFormat.png))!.buffer
+          .asUint8List();
+    });
+    const channel = MethodChannel(ChannelNames.settings);
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    var settings = <String, Object?>{'revision': 0};
+    final saved = <String>[];
+    final deleted = <String>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case MethodNames.systemStatus:
+          return {'accessibility': true};
+        case MethodNames.getSettings:
+          return settings;
+        case MethodNames.importStickerImage:
+          return {'bytes': png, 'width': 1000, 'height': 500};
+        case MethodNames.saveSticker:
+          saved.add((call.arguments as Map)['id'] as String);
+          return '/tmp/x.png';
+        case MethodNames.deleteSticker:
+          deleted.add((call.arguments as Map)['id'] as String);
+          return null;
+        case MethodNames.saveSettings:
+          final draft = Map<String, Object?>.from(call.arguments as Map)
+            ..remove('credentials');
+          settings = {...draft, 'revision': (settings['revision'] as int) + 1};
+          return settings;
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    tester.view.physicalSize = const Size(900, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(const SettingsApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('截图'));
+    await tester.pumpAndSettle();
+    expect(find.text('还没有贴纸'), findsOneWidget);
+    await tester.ensureVisible(find.text('添加图片…'));
+    await tester.tap(find.text('添加图片…'));
+    await tester.pumpAndSettle();
+    expect(find.text('默认大小 512 × 256 pt'), findsOneWidget);
+    final handle = find.byKey(const ValueKey('sticker-handle-3'));
+    final preview = find
+        .ancestor(of: handle, matching: find.byType(SizedBox))
+        .first;
+    final center = tester.getCenter(preview);
+    // 分步移动越过手势判定距离，最终指针在中心右 50pt、下 10pt：横向决定大小。
+    final gesture = await tester.startGesture(tester.getCenter(handle));
+    await gesture.moveBy(const Offset(-30, -30));
+    await gesture.moveTo(center + const Offset(50, 10));
+    await gesture.up();
+    await tester.pumpAndSettle();
+    final long = (100 / StickerUploadDialog.previewScale).round();
+    await tester.tap(find.widgetWithText(FilledButton, '添加'));
+    await tester.pumpAndSettle();
+    final stickers = settings[PreferenceKeys.stickers] as List;
+    expect(saved, hasLength(1));
+    expect((stickers.single as Map)['id'], saved.single);
+    expect(((stickers.single as Map)['width'] as num).round(), long);
+
+    final thumbnail = find.byKey(ValueKey('sticker-${saved.single}'));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: tester.getCenter(thumbnail));
+    addTearDown(mouse.removePointer);
+    await tester.pump();
+    await tester.tap(find.byTooltip('删除贴纸'));
+    await tester.pumpAndSettle();
+    expect(settings[PreferenceKeys.stickers], isEmpty);
+    expect(deleted, saved);
+  });
+
   testWidgets('翻译语言分段：切到输入翻译只修改输入翻译的一组语言，全局不变（#99）', (tester) async {
     // 边界：全局 zh-CN/en，输入翻译未设置时显示复制的 zh-CN/en；切到「输入翻译」把次要语言改为日本語，
     // 提交后输入翻译次要语言为 ja，全局次要语言仍为 en。

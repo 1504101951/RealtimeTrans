@@ -32,6 +32,10 @@ abstract final class PreferenceKeys {
   /// 确认截图时的动作：copy 或 copyAndSave；仅 Dart 读取（#111）。
   static const screenshotConfirmAction = 'screenshotConfirmAction';
 
+  /// 我的贴纸：[{id, width, height}]，宽高为默认大小（pt），按添加顺序；截图快照另带贴纸目录路径（#103）。
+  static const stickers = 'stickers';
+  static const stickerDirectory = 'stickerDirectory';
+
   /// 术语表；值为 {term, translation, language} 字典列表，仅 Dart 读取（#104）。
   static const glossary = 'glossary';
 

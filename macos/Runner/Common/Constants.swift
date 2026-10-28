@@ -166,6 +166,16 @@ enum AppConstants {
     static let appStartFailedMethod = "appStartFailed"
     static let appearanceChangedMethod = "appearanceChanged"
     static let applicationSupportPathMethod = "applicationSupportPath"
+    /// 贴纸库协议值（#103），与Dart常量同步：选择并规范化图片、写入贴纸文件、删除贴纸文件。
+    static let importStickerImageMethod = "importStickerImage"
+    static let saveStickerMethod = "saveSticker"
+    static let deleteStickerMethod = "deleteSticker"
+    static let stickerDirectoryMethod = "stickerDirectory"
+    /// 截图快照中的贴纸列表与贴纸目录键（#103），与Dart常量同步。
+    static let stickersKey = "stickers"
+    static let stickerDirectoryKey = "stickerDirectory"
+    /// 贴纸图片长边上限（像素），导入时超过则按原比例缩小（#103）。
+    static let stickerMaxPixels = 1024
     static let applySettingsMethod = "applySettings"
     static let automaticKey = "automatic"
     static let badAppError = "bad_app"
@@ -323,6 +333,10 @@ enum AppConstants {
     static var applicationSupportURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(applicationSupportFolderName, isDirectory: true)
+    }
+    /// 无参数；返回 App 数据目录下保存「我的贴纸」PNG 的目录（不保证已创建，#103）。
+    static var stickersURL: URL {
+        applicationSupportURL.appendingPathComponent("Stickers", isDirectory: true)
     }
     /// MCP 接口（#96、#68「MCP 接口边界」）：stdio helper 与 App 共用的名称、图片预算和英文协议文案。
     /// helper 可执行文件名，位于 App 包 Contents/MacOS。
