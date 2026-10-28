@@ -154,7 +154,7 @@ TranslationProgress 只保存已完成分片、配对和上一片双尾；Select
 
 截图美化（#103）由 `BeautifyStyle` 描述，`paintBeautifyBackdrop` 在内容外画渐变背景并在背景上画阴影、覆盖圆角外四角；编辑器的 `_DimPainter` 以显示坐标调用它预览，`EditDocument.renderPng(beautify:, unit:)` 以像素倍率调用它导出，二者一致。复制与保存传入美化参数，贴图与 OCR 不传。美化参数只属于本次截图，不写偏好。
 
-框选精确控制（#106）的比例修正由 `common/utils/geometry.dart` 的 `ratioRect` 完成：给定不动的锚点、指针点、宽高比、驱动方向与截图尺寸，返回保持比例、不越界且较短边不小于下限的矩形；新框选、八个控制点、选择比例与 ⌥ 方向键共用它。比例与方向键微调状态只属于 `ScreenshotApp` 本次截图，不写偏好，也不进入 `EditDocument` 撤销历史。工具栏下方展开的行由 `_ExpandedRow`（录制、实时翻译、美化、比例）统一表示，同一时刻最多一行。
+框选精确控制（#106）的可拖动矩形的命中与变换由 `screenshot/box_transform.dart` 的 `hitBoxHandle`、`dragBox` 完成（控制点为枚举 `BoxHandle`，矩形与旋转角为值对象 `BoxFrame`），裁剪框与文字框只以 `BoxRules` 区分。比例修正由 `common/utils/geometry.dart` 的 `ratioRect` 完成：给定不动的锚点、指针点、宽高比、驱动方向与截图尺寸，返回保持比例、不越界且较短边不小于下限的矩形；新框选、八个控制点、选择比例与 ⌥ 方向键共用它。比例与方向键微调状态只属于 `ScreenshotApp` 本次截图，不写偏好，也不进入 `EditDocument` 撤销历史。工具栏下方展开的行由 `_ExpandedRow`（录制、实时翻译、美化、比例）统一表示，同一时刻最多一行。
 
 DrawingStyle是标注组合的不可变样式，颜色与线宽控件只返回已确认的值；文档沿用现有命令历史。原生采集在取得前台应用时冻结显示名，不在异步完成后按PID重新查询。
 

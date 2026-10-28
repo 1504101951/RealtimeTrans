@@ -47,58 +47,6 @@ Offset pinOriginAppKit({
   );
 }
 
-/// bounds/point 为同一坐标系；pad 为控制点命中半径，edgePad 为边线半宽。
-/// 返回 nw/n/ne/e/se/s/sw/w/move，未命中为 null。角优先于边，边优先于框内。
-String? editHandleAt(Rect bounds, Offset point, double pad, {double? edgePad}) {
-  final edge = edgePad ?? pad;
-  final corners = <String, Offset>{
-    'nw': bounds.topLeft,
-    'ne': bounds.topRight,
-    'sw': bounds.bottomLeft,
-    'se': bounds.bottomRight,
-  };
-  for (final entry in corners.entries) {
-    if ((entry.value.dx - point.dx).abs() <= pad &&
-        (entry.value.dy - point.dy).abs() <= pad) {
-      return entry.key;
-    }
-  }
-  final edges = <String, Offset>{
-    'n': bounds.topCenter,
-    's': bounds.bottomCenter,
-    'w': bounds.centerLeft,
-    'e': bounds.centerRight,
-  };
-  for (final entry in edges.entries) {
-    if ((entry.value.dx - point.dx).abs() <= pad &&
-        (entry.value.dy - point.dy).abs() <= pad) {
-      return entry.key;
-    }
-  }
-  if ((point.dy - bounds.top).abs() <= edge &&
-      point.dx >= bounds.left &&
-      point.dx <= bounds.right) {
-    return 'n';
-  }
-  if ((point.dy - bounds.bottom).abs() <= edge &&
-      point.dx >= bounds.left &&
-      point.dx <= bounds.right) {
-    return 's';
-  }
-  if ((point.dx - bounds.left).abs() <= edge &&
-      point.dy >= bounds.top &&
-      point.dy <= bounds.bottom) {
-    return 'w';
-  }
-  if ((point.dx - bounds.right).abs() <= edge &&
-      point.dy >= bounds.top &&
-      point.dy <= bounds.bottom) {
-    return 'e';
-  }
-  if (bounds.contains(point)) return 'move';
-  return null;
-}
-
 /// anchor 为保持不动的角点，toward 为指针一侧的点，ratio 为宽高比，byHeight 为 true 时由高度推算宽度，
 /// bounds 为截图像素尺寸，minSide 为较短边的最小长度（0 表示不限制）。
 /// 返回从 anchor 指向 toward 所在方向、保持 ratio 且不越出 bounds 的矩形；空间不足时整体缩小（#106）。

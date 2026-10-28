@@ -36,12 +36,6 @@ void main() {
       screenshotFilename(DateTime(2026, 9, 6, 1, 2, 3, 4)),
       '截图_2026-09-06_01-02-03-004.png',
     );
-    const box = Rect.fromLTWH(10, 10, 80, 80);
-    expect(editHandleAt(box, const Offset(10, 10), 8), 'nw');
-    expect(editHandleAt(box, const Offset(50, 10), 8), 'n');
-    expect(editHandleAt(box, const Offset(90, 50), 8), 'e');
-    expect(editHandleAt(box, const Offset(50, 50), 8), 'move');
-    expect(editHandleAt(box, const Offset(0, 0), 8), isNull);
     expect(
       pinOriginAppKit(
         crop: const Rect.fromLTWH(2, 2, 4, 4),

@@ -25,6 +25,7 @@ import 'edit_document.dart';
 import 'drawing_style.dart';
 import 'drawing_controls.dart';
 import 'measure_layer.dart';
+import 'box_transform.dart';
 import 'recognized_text_panel.dart';
 import 'screenshot_editor_layout.dart';
 import '../settings/screenshot_toolbar_preferences.dart';
@@ -33,32 +34,33 @@ import '../translation/translation_types.dart';
 
 /// handle 为控制点方向，plusWhenIdle控制空白十字；channel为截图引擎，返回系统或原生对角光标。
 MouseCursor cursorForEditHandle(
-  String? handle, {
+  BoxHandle? handle, {
   required bool plusWhenIdle,
   required MethodChannel channel,
 }) {
   switch (handle) {
-    case 'n':
-    case 's':
+    case BoxHandle.n:
+    case BoxHandle.s:
       return SystemMouseCursors.resizeUpDown;
-    case 'e':
-    case 'w':
+    case BoxHandle.e:
+    case BoxHandle.w:
       return SystemMouseCursors.resizeLeftRight;
-    case 'nw':
-    case 'se':
+    case BoxHandle.nw:
+    case BoxHandle.se:
       return NativeResizeCursor(
         ResizeCursorAxes.northWestSouthEast,
         channel: channel,
       );
-    case 'ne':
-    case 'sw':
+    case BoxHandle.ne:
+    case BoxHandle.sw:
       return NativeResizeCursor(
         ResizeCursorAxes.northEastSouthWest,
         channel: channel,
       );
-    case 'move':
+    case BoxHandle.move:
+    case BoxHandle.rotate:
       return SystemMouseCursors.grab;
-    default:
+    case null:
       return plusWhenIdle
           ? SystemMouseCursors.precise
           : SystemMouseCursors.basic;
@@ -203,7 +205,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
   String? _editingTextId;
 
   /// 文本框拉伸时命中的控制点；空表示在画新框。
-  String? _resizeHandle;
+  BoxHandle? _resizeHandle;
 
   /// 当前窗口 DPR；工具栏字号是点，标注里存图像素。
   double _pixelRatio = 1;
@@ -1360,10 +1362,18 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       _dragCurrent = imagePoint;
       if (_previewCrop != null) {
         if (_resizeHandle != null) {
-          // 锁定比例时控制点按比例调整，移动选区不受比例影响（#106）。
-          _previewCrop = _cropRatio == null || _resizeHandle == 'move'
-              ? _resizedRect(_document.cropRect, _resizeHandle!, imagePoint)
-              : _ratioResized(_document.cropRect, _resizeHandle!, imagePoint);
+          // dragBox 统一处理移动与拉伸；锁定比例时控制点按比例调整，移动不受比例影响（#106）。
+          _previewCrop = dragBox(
+            BoxFrame(_document.cropRect),
+            _resizeHandle!,
+            from: _dragStart!,
+            to: imagePoint,
+            rules: BoxRules(
+              area: _imageArea,
+              minSide: CropMetrics.minSide,
+              ratio: _cropRatio,
+            ),
+          ).rect;
         } else if (_dragStart != null) {
           _previewCrop = _newSelection(_dragStart!, imagePoint);
         }
@@ -1378,8 +1388,18 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           _previewAnnotation = current.copyWith(
             bounds: _fittedTextBounds(
               current,
-              _resizedRect(current.bounds, _resizeHandle!, imagePoint),
-              moved: _resizeHandle == 'move',
+              // dragBox 按文字框规则移动或拉伸，限制在截图范围内。
+              dragBox(
+                BoxFrame(current.bounds),
+                _resizeHandle!,
+                from: _dragStart!,
+                to: imagePoint,
+                rules: BoxRules(
+                  area: _imageArea,
+                  minSide: CropMetrics.minSide,
+                ),
+              ).rect,
+              moved: _resizeHandle == BoxHandle.move,
             ),
           );
         }
@@ -1502,8 +1522,8 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
         .where((item) => item.id == _selectedTextId)
         .firstOrNull;
     if (selected != null) {
-      final handle = textBoxHandle(_handleAt(selected.bounds, imagePoint));
-      if (handle != null && handle != 'move') {
+      final handle = _handleAt(selected.bounds, imagePoint)?.widthOnly;
+      if (handle != null && handle != BoxHandle.move) {
         setState(() {
           _cropSelected = false;
           _resizeHandle = handle;
@@ -1520,7 +1540,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
         _cropSelected = false;
         _selectedTextId = hit.id;
         _resizeHandle =
-            textBoxHandle(_handleAt(hit.bounds, imagePoint)) ?? 'move';
+            _handleAt(hit.bounds, imagePoint)?.widthOnly ?? BoxHandle.move;
         _dragStart = imagePoint;
         _dragCurrent = imagePoint;
         _previewAnnotation = hit;
@@ -1576,62 +1596,21 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     return null;
   }
 
-  /// bounds 为文本框或裁剪框，point 为源图像素；八角拉伸，框内移动。
-  String? _handleAt(Rect bounds, Offset point) {
-    return editHandleAt(
-      bounds,
-      point,
-      GlassMetrics.cropHandleHitRadius * _pixelRatio,
-      edgePad: GlassMetrics.cropEdgeHitRadius * _pixelRatio,
-    );
-  }
+  /// bounds 为文本框或裁剪框，point 为源图像素；返回命中的控制点（八角拉伸、框内移动），未命中为 null。
+  BoxHandle? _handleAt(Rect bounds, Offset point) => hitBoxHandle(
+    BoxFrame(bounds),
+    point,
+    pad: GlassMetrics.cropHandleHitRadius * _pixelRatio,
+    edgePad: GlassMetrics.cropEdgeHitRadius * _pixelRatio,
+  );
 
-  /// bounds 为改前矩形，handle 为控制点，point 为当前指针；返回新矩形。
-  Rect _resizedRect(Rect bounds, String handle, Offset point) {
-    if (handle == 'move') {
-      final next = bounds.shift(point - _dragStart!);
-      final maxX = math.max(0, _document.width - next.width);
-      final maxY = math.max(0, _document.height - next.height);
-      return Rect.fromLTWH(
-        next.left.clamp(0, maxX).toDouble(),
-        next.top.clamp(0, maxY).toDouble(),
-        next.width,
-        next.height,
-      );
-    }
-    var left = bounds.left;
-    var top = bounds.top;
-    var right = bounds.right;
-    var bottom = bounds.bottom;
-    switch (handle) {
-      case 'n':
-        top = point.dy;
-      case 's':
-        bottom = point.dy;
-      case 'w':
-        left = point.dx;
-      case 'e':
-        right = point.dx;
-      case 'nw':
-        left = point.dx;
-        top = point.dy;
-      case 'ne':
-        right = point.dx;
-        top = point.dy;
-      case 'sw':
-        left = point.dx;
-        bottom = point.dy;
-      case 'se':
-        right = point.dx;
-        bottom = point.dy;
-    }
-    return Rect.fromLTRB(
-      left <= right - CropMetrics.minSide ? left : right - CropMetrics.minSide,
-      top <= bottom - CropMetrics.minSide ? top : bottom - CropMetrics.minSide,
-      right,
-      bottom,
-    );
-  }
+  /// 无参数；返回截图源图像素范围，作为移动与比例修正的边界。
+  Rect get _imageArea => Rect.fromLTWH(
+    0,
+    0,
+    _document.width.toDouble(),
+    _document.height.toDouble(),
+  );
 
   /// start/end 为拖出新选区的起止像素点；返回自由或锁定比例的新选区，比例下不强制最小边长（由松手时判断）。
   Rect _newSelection(Offset start, Offset end) => _cropRatio == null
@@ -1644,29 +1623,6 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           bounds: Size(_document.width.toDouble(), _document.height.toDouble()),
           minSide: 0,
         );
-
-  /// bounds 为当前选区，handle 为控制点，point 为指针像素位置；返回按锁定比例、以对角或对边为锚点调整后的选区（#106）。
-  Rect _ratioResized(Rect bounds, String handle, Offset point) {
-    // 角点由指针决定宽度；左右边只改宽度、上下边只改高度，另一边按比例推算。
-    final (anchor, toward, byHeight) = switch (handle) {
-      'nw' => (bounds.bottomRight, point, false),
-      'ne' => (bounds.bottomLeft, point, false),
-      'sw' => (bounds.topRight, point, false),
-      'e' => (bounds.topLeft, Offset(point.dx, bounds.bottom), false),
-      'w' => (bounds.topRight, Offset(point.dx, bounds.bottom), false),
-      's' => (bounds.topLeft, Offset(bounds.right, point.dy), true),
-      'n' => (bounds.bottomLeft, Offset(bounds.right, point.dy), true),
-      _ => (bounds.topLeft, point, false),
-    };
-    return ratioRect(
-      anchor: anchor,
-      toward: toward,
-      ratio: _cropRatio!,
-      byHeight: byHeight,
-      bounds: Size(_document.width.toDouble(), _document.height.toDouble()),
-      minSide: CropMetrics.minSide,
-    );
-  }
 
   /// ratio 为选择的宽高比，null 为自由；锁定时以选区左上角为锚点保持宽度调整高度，超出截图则整体缩小，无返回值（#106）。
   void _chooseRatio(double? ratio) {
@@ -3052,7 +3008,7 @@ class _EditorSurface extends StatefulWidget {
   final ValueChanged<Offset?> onPickerHover;
   final ValueChanged<Offset> onPickerTap;
   final bool cropSelected;
-  final String? activeHandle;
+  final BoxHandle? activeHandle;
   final VoidCallback onDoubleTap;
   final ValueChanged<Offset> onDoubleTapDown;
 
@@ -3299,17 +3255,14 @@ class _EditorSurfaceState extends State<_EditorSurface> {
                     (widget.previewAnnotation ?? widget.selectedText)?.bounds;
                 final handle = box == null
                     ? null
-                    : textBoxHandle(
-                        editHandleAt(
-                          box,
-                          point,
-                          pad,
-                          edgePad:
-                              GlassMetrics.cropEdgeHitRadius *
-                              widget.pixelRatio,
-                        ),
-                      );
-                if (handle != null && handle != 'move') {
+                    : hitBoxHandle(
+                        BoxFrame(box),
+                        point,
+                        pad: pad,
+                        edgePad:
+                            GlassMetrics.cropEdgeHitRadius * widget.pixelRatio,
+                      )?.widthOnly;
+                if (handle != null && handle != BoxHandle.move) {
                   return cursorForEditHandle(
                     handle,
                     plusWhenIdle: false,
@@ -3320,17 +3273,15 @@ class _EditorSurfaceState extends State<_EditorSurface> {
                   if (annotation.kind == AnnotationKind.text &&
                       annotation.bounds.inflate(4).contains(point)) {
                     return cursorForEditHandle(
-                      textBoxHandle(
-                            editHandleAt(
-                              annotation.bounds,
-                              point,
-                              pad,
-                              edgePad:
-                                  GlassMetrics.cropEdgeHitRadius *
-                                  widget.pixelRatio,
-                            ),
-                          ) ??
-                          'move',
+                      hitBoxHandle(
+                            BoxFrame(annotation.bounds),
+                            point,
+                            pad: pad,
+                            edgePad:
+                                GlassMetrics.cropEdgeHitRadius *
+                                widget.pixelRatio,
+                          )?.widthOnly ??
+                          BoxHandle.move,
                       plusWhenIdle: false,
                       channel: widget.channel,
                     );
@@ -3346,10 +3297,10 @@ class _EditorSurfaceState extends State<_EditorSurface> {
                     !widget.cropSelected) {
                   return SystemMouseCursors.precise;
                 }
-                final handle = editHandleAt(
-                  widget.previewCrop ?? widget.document.cropRect,
+                final handle = hitBoxHandle(
+                  BoxFrame(widget.previewCrop ?? widget.document.cropRect),
                   point,
-                  pad,
+                  pad: pad,
                   edgePad: GlassMetrics.cropEdgeHitRadius * widget.pixelRatio,
                 );
                 if (handle != null) {
@@ -3565,11 +3516,6 @@ class _EditorSurfaceState extends State<_EditorSurface> {
     );
   }
 }
-
-/// handle 为文字框上命中的控制点。文字框高度随内容决定，上下边不能拉伸，按移动处理；
-/// 其余控制点原样返回。
-String? textBoxHandle(String? handle) =>
-    handle == 'n' || handle == 's' ? 'move' : handle;
 
 /// cursorFor 根据本地坐标返回四角拉伸光标；child 为画布手势层。
 class _CornerCursor extends StatefulWidget {
