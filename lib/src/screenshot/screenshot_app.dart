@@ -462,6 +462,8 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       AnnotationKind.text => ScreenshotTool.text,
       AnnotationKind.mask => ScreenshotTool.rect,
       AnnotationKind.step => ScreenshotTool.step,
+      // 贴纸没有颜色与线宽，选中时不显示样式控件（#103）。
+      AnnotationKind.sticker => ScreenshotTool.cursor,
     };
   }
 

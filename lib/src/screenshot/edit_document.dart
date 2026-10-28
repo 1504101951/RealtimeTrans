@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -25,7 +26,15 @@ class EditAnnotation {
     this.shapeMode = ShapeMode.solid,
     this.shape = ShapeVariant.rectangle,
     this.fontSize = ScreenshotDefaults.fontSize,
+    this.rotation = 0,
+    this.stickerId,
   }) : style = style ?? DrawingStyle(color: color, strokeWidth: strokeWidth);
+
+  /// 贴纸绕 bounds 中心的旋转弧度（屏幕坐标 y 向下，正值顺时针）；其他标注为 0（#103）。
+  final double rotation;
+
+  /// 「我的贴纸」的 id；Emoji 贴纸为 null，表情字符存于 text（#103）。
+  final String? stickerId;
 
   /// 文档内唯一 id；预览用临时值，提交后由文档分配。
   final String id;
@@ -59,6 +68,7 @@ class EditAnnotation {
     DrawingStyle? style,
     ShapeMode? shapeMode,
     ShapeVariant? shape,
+    double? rotation,
   }) {
     return EditAnnotation(
       id: id,
@@ -73,6 +83,8 @@ class EditAnnotation {
       shapeMode: shapeMode ?? this.shapeMode,
       shape: shape ?? this.shape,
       fontSize: fontSize ?? this.fontSize,
+      rotation: rotation ?? this.rotation,
+      stickerId: stickerId,
     );
   }
 }
@@ -178,6 +190,8 @@ class EditDocument extends ChangeNotifier {
   Uint8List? _sourcePng;
   int _width = 0;
   int _height = 0;
+  /// 本次编辑用到的「我的贴纸」位图（id → 图像），预览与导出共用；由截图页面按需加载（#103）。
+  final Map<String, ui.Image> stickerImages = {};
   Rect _crop = Rect.zero;
   final List<EditAnnotation> _annotations = <EditAnnotation>[];
   final List<_EditCommand> _undo = <_EditCommand>[];
@@ -262,6 +276,8 @@ class EditDocument extends ChangeNotifier {
             style: annotation.style,
             strokeWidth: annotation.strokeWidth,
             fontSize: annotation.fontSize,
+            rotation: annotation.rotation,
+            stickerId: annotation.stickerId,
           )
         : annotation;
     _push(_AddAnnotationCommand(withId));
@@ -337,20 +353,41 @@ class EditDocument extends ChangeNotifier {
     // stepNumbers 按标注顺序给编号标记编号，与编辑预览一致。
     final numbers = stepNumbers(_annotations);
     for (final annotation in _annotations) {
+      // 美化时贴纸可以落在背景留白区，留到背景合成之后再画（#103）。
+      if (beautify != null && annotation.kind == AnnotationKind.sticker) {
+        continue;
+      }
       paintAnnotation(
         canvas,
         annotation,
         sourceImage: source,
         stepNumber: numbers[annotation.id],
+        stickers: stickerImages,
       );
     }
     canvas.restore();
     final content = recorder.endRecording();
-    // 未美化时输出就是裁剪内容；美化时把内容画到扩出内边距的画布上。
+    // 未美化时输出就是裁剪内容；美化时把内容画到扩出内边距的画布上，再在整幅画布上画贴纸。
     final padding = beautify == null ? 0 : (beautify.padding * unit).round();
     final picture = beautify == null
         ? content
-        : _beautified(content, outWidth, outHeight, padding, beautify, unit);
+        : _beautified(
+            content,
+            outWidth,
+            outHeight,
+            padding,
+            beautify,
+            unit,
+            stickers: [
+              for (final annotation in _annotations)
+                if (annotation.kind == AnnotationKind.sticker) annotation,
+            ],
+            stickerImages: stickerImages,
+            origin: Offset(
+              padding - srcRect.left,
+              padding - srcRect.top,
+            ),
+          );
     final image = await picture.toImage(
       outWidth + padding * 2,
       outHeight + padding * 2,
@@ -366,14 +403,18 @@ class EditDocument extends ChangeNotifier {
 
   /// content 为裁剪内容，width/height 为内容像素尺寸，padding 为每侧像素内边距，style/unit 为美化参数；
   /// 返回背景、阴影与按圆角裁切的内容合成后的画面，预览与此共用 paintBeautifyBackdrop。
+  /// stickers 为要画在整幅画布上的贴纸，stickerImages 为其位图，origin 为源图原点在画布中的位置。
   static ui.Picture _beautified(
     ui.Picture content,
     int width,
     int height,
     int padding,
     BeautifyStyle style,
-    double unit,
-  ) {
+    double unit, {
+    required List<EditAnnotation> stickers,
+    required Map<String, ui.Image> stickerImages,
+    required Offset origin,
+  }) {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     final area = Rect.fromLTWH(
@@ -390,6 +431,13 @@ class EditDocument extends ChangeNotifier {
     canvas.translate(area.left, area.top);
     canvas.drawPicture(content);
     canvas.restore();
+    // 贴纸以源图坐标平移到画布，背景留白区内的部分保留（#103）。
+    canvas.save();
+    canvas.translate(origin.dx, origin.dy);
+    for (final sticker in stickers) {
+      paintAnnotation(canvas, sticker, stickers: stickerImages);
+    }
+    canvas.restore();
     return recorder.endRecording();
   }
 
@@ -399,13 +447,15 @@ class EditDocument extends ChangeNotifier {
     EditAnnotation annotation, {
     ui.Image? sourceImage,
     int? stepNumber,
+    Map<String, ui.Image> stickers = const {},
   }) {
-    // 统一渲染接缝让预览与导出使用相同原图马赛克算法与编号样式。
+    // 统一渲染接缝让预览与导出使用相同原图马赛克算法、编号样式与贴纸位图。
     _paintAnnotation(
       canvas,
       annotation,
       sourceImage: sourceImage,
       stepNumber: stepNumber,
+      stickers: stickers,
     );
   }
 
@@ -541,8 +591,29 @@ class EditDocument extends ChangeNotifier {
     EditAnnotation annotation, {
     ui.Image? sourceImage,
     int? stepNumber,
+    Map<String, ui.Image> stickers = const {},
   }) {
     switch (annotation.kind) {
+      case AnnotationKind.sticker:
+        // 贴纸绕中心旋转后画入 bounds；我的贴纸画位图，Emoji 画表情字符（#103）。
+        final center = annotation.bounds.center;
+        canvas.save();
+        canvas.translate(center.dx, center.dy);
+        canvas.rotate(annotation.rotation);
+        canvas.translate(-center.dx, -center.dy);
+        final id = annotation.stickerId;
+        if (id != null) {
+          final image = stickers[id]!;
+          canvas.drawImageRect(
+            image,
+            Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
+            annotation.bounds,
+            Paint()..filterQuality = ui.FilterQuality.medium,
+          );
+        } else {
+          _paintEmoji(canvas, annotation.text, annotation.bounds);
+        }
+        canvas.restore();
       case AnnotationKind.rectangle:
         final paint = _fillPaint(annotation, annotation.bounds)
           ..style = annotation.shape.filled
@@ -689,6 +760,25 @@ class EditDocument extends ChangeNotifier {
           annotation.bounds.topLeft,
         );
     }
+  }
+
+  /// canvas 为绘制目标，emoji 为表情字符，bounds 为贴纸范围；按 bounds 高度定字号，等比缩放后居中绘制（#103）。
+  static void _paintEmoji(Canvas canvas, String emoji, Rect bounds) {
+    final paragraph =
+        (ui.ParagraphBuilder(ui.ParagraphStyle(fontSize: bounds.height))
+              ..pushStyle(ui.TextStyle(fontSize: bounds.height))
+              ..addText(emoji))
+            .build()
+          ..layout(const ui.ParagraphConstraints(width: double.infinity));
+    final size = Size(paragraph.maxIntrinsicWidth, paragraph.height);
+    if (size.isEmpty) return;
+    // 字形外框按 bounds 等比缩放，避免宽高比不同的表情被拉伸。
+    final scale = math.min(bounds.width / size.width, bounds.height / size.height);
+    canvas.save();
+    canvas.translate(bounds.center.dx, bounds.center.dy);
+    canvas.scale(scale);
+    canvas.drawParagraph(paragraph, Offset(-size.width / 2, -size.height / 2));
+    canvas.restore();
   }
 
   /// unit为单位方向；返回逆时针垂直向量，供箭头顶点计算，不改变输入。

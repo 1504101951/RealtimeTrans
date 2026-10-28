@@ -49,3 +49,4 @@ Dart业务逻辑和Flutter界面行为回归测试。
 44. [screenshot_measure_confirm_test.dart](screenshot_measure_confirm_test.dart)：验证截图编辑器取色复制源像素色值、标尺测量与不进入导出，以及确认截图动作。
 45. [dictionary_definition_test.dart](dictionary_definition_test.dart)：验证词典释义按词条与音标、词性、义项、例句及分节标题拆行，汉语词典与未识别格式保留原文。
 46. [box_transform_test.dart](box_transform_test.dart)：验证可拖动矩形的命中优先级、旋转后命中、移动限制、自由与比例拉伸、旋转吸附与旋转后拉伸保持对角。
+47. [sticker_test.dart](sticker_test.dart)：按像素验证贴纸位图按范围绘制、旋转后的占位，以及开启美化时可画在背景留白区、不美化时裁到截图范围。

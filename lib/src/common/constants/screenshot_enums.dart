@@ -20,7 +20,7 @@ abstract final class ResizeCursorAxes {
 }
 
 /// 标注种类；裁剪不进入此枚举，撤销只覆盖这些标注。step 为步骤编号标记（#107）。
-enum AnnotationKind { rectangle, arrow, text, mask, stroke, step }
+enum AnnotationKind { rectangle, arrow, text, mask, stroke, step, sticker }
 
 /// 画笔绘制模式：普通颜色轨迹、原图像素马赛克或半透明荧光笔（#107）。
 enum ShapeMode { solid, mosaic, highlighter }
