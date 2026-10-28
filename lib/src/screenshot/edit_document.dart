@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 
 import '../common/constants/screenshot_enums.dart';
+import '../common/utils/geometry.dart';
 import 'beautify.dart';
 import 'drawing_style.dart';
 import '../common/constants/drawing_metrics.dart';
@@ -132,17 +133,24 @@ class _RemoveAnnotationCommand extends _EditCommand {
       document._annotations.insert(index, annotation);
 }
 
-/// text 为文字内容，fontSize 为字号，width 为文字框宽度，单位均为源图像素。
-/// 返回按该宽度换行后的段落；预览、导出与高度测量共用同一种排版。
+/// text 为文字内容，fontSize 为字号，width 为文字框宽度，单位均为源图像素；color 为文字颜色，
+/// foreground 为渐变画笔（提供时代替 color，#103）。返回按该宽度换行后的段落；预览、导出与高度测量共用同一种排版。
 ui.Paragraph layoutTextBox({
   required String text,
   required double fontSize,
   required double width,
   Color color = const Color(0xFF000000),
+  Paint? foreground,
 }) {
   final builder =
       ui.ParagraphBuilder(ui.ParagraphStyle(fontSize: fontSize))
-        ..pushStyle(ui.TextStyle(color: color, fontSize: fontSize))
+        ..pushStyle(
+          ui.TextStyle(
+            color: foreground == null ? color : null,
+            foreground: foreground,
+            fontSize: fontSize,
+          ),
+        )
         ..addText(text.isEmpty ? ' ' : text);
   return builder.build()
     ..layout(ui.ParagraphConstraints(width: width.clamp(1, 4000).toDouble()));
@@ -508,6 +516,26 @@ class EditDocument extends ChangeNotifier {
       ..layout(const ui.ParagraphConstraints(width: double.infinity));
   }
 
+  /// annotation 为标注，bounds 为渐变铺满的矩形，opacity 为整体不透明度；
+  /// 返回纯色或渐变的填充画笔，渐变的不透明度写入渐变颜色（#103）。
+  static Paint _fillPaint(
+    EditAnnotation annotation,
+    Rect bounds, {
+    double opacity = 1,
+  }) {
+    final paint = Paint()
+      ..color = annotation.color.withValues(alpha: opacity);
+    final gradient = annotation.style.gradient;
+    if (gradient != null) {
+      paint.shader = gradient.shader(
+        annotation.color,
+        bounds,
+        opacity: opacity,
+      );
+    }
+    return paint;
+  }
+
   static void _paintAnnotation(
     Canvas canvas,
     EditAnnotation annotation, {
@@ -516,8 +544,7 @@ class EditDocument extends ChangeNotifier {
   }) {
     switch (annotation.kind) {
       case AnnotationKind.rectangle:
-        final paint = Paint()
-          ..color = annotation.color
+        final paint = _fillPaint(annotation, annotation.bounds)
           ..style = annotation.shape.filled
               ? PaintingStyle.fill
               : PaintingStyle.stroke
@@ -531,7 +558,7 @@ class EditDocument extends ChangeNotifier {
         if (annotation.shapeMode == ShapeMode.solid) {
           canvas.drawRect(
             annotation.bounds,
-            Paint()..color = annotation.color.withValues(alpha: 1),
+            _fillPaint(annotation, annotation.bounds),
           );
         } else if (sourceImage != null) {
           _paintMosaic(
@@ -545,8 +572,12 @@ class EditDocument extends ChangeNotifier {
         final start = annotation.start;
         final end = annotation.end;
         if (start == null || end == null) return;
-        final paint = Paint()
-          ..color = annotation.color
+        // 箭身与箭头共用起止点外扩一个线宽的矩形作为渐变范围，水平或竖直箭头也有面积。
+        final arrowBounds = Rect.fromPoints(
+          start,
+          end,
+        ).inflate(annotation.strokeWidth * 2 + 8);
+        final paint = _fillPaint(annotation, arrowBounds)
           ..strokeWidth = annotation.strokeWidth
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round
@@ -558,8 +589,7 @@ class EditDocument extends ChangeNotifier {
         final tipSize = 8 + annotation.strokeWidth * 2;
         final left = end - unit * tipSize + _perp(unit) * (tipSize * 0.45);
         final right = end - unit * tipSize - _perp(unit) * (tipSize * 0.45);
-        final tip = Paint()
-          ..color = annotation.color
+        final tip = _fillPaint(annotation, arrowBounds)
           ..style = PaintingStyle.fill;
         final path = Path()
           ..moveTo(end.dx, end.dy)
@@ -594,13 +624,18 @@ class EditDocument extends ChangeNotifier {
           return;
         }
         // 荧光笔整条轨迹一次绘制半透明颜色，同一笔内重叠处不叠加加深（#107）。
-        final paint = Paint()
-          ..color = annotation.shapeMode == ShapeMode.highlighter
-              ? annotation.color.withValues(
-                  alpha: DrawingMetrics.highlighterOpacity,
-                )
-              : annotation.color
-          ..strokeWidth = annotation.strokeWidth
+        // 渐变铺满笔迹外接矩形（含半个线宽）。
+        final paint =
+            _fillPaint(
+                annotation,
+                boundsForPoints(
+                  annotation.points,
+                ).inflate(annotation.strokeWidth / 2),
+                opacity: annotation.shapeMode == ShapeMode.highlighter
+                    ? DrawingMetrics.highlighterOpacity
+                    : 1,
+              )
+              ..strokeWidth = annotation.strokeWidth
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round
           ..strokeJoin = StrokeJoin.round
@@ -617,7 +652,7 @@ class EditDocument extends ChangeNotifier {
         canvas.drawCircle(
           annotation.bounds.center,
           diameter / 2,
-          Paint()..color = annotation.color,
+          _fillPaint(annotation, annotation.bounds),
         );
         final digits =
             annotation.color.computeLuminance() >
@@ -647,6 +682,9 @@ class EditDocument extends ChangeNotifier {
             fontSize: annotation.fontSize,
             width: annotation.bounds.width,
             color: annotation.color,
+            foreground: annotation.style.gradient == null
+                ? null
+                : _fillPaint(annotation, annotation.bounds),
           ),
           annotation.bounds.topLeft,
         );

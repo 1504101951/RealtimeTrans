@@ -8,6 +8,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:translate_app/src/common/widgets/native_glass.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:translate_app/src/common/constants/screenshot_enums.dart';
 import 'package:translate_app/src/common/utils/geometry.dart';
@@ -830,6 +831,58 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
   });
 
+  testWidgets('美化行：未开启美化时下拉禁用，应用背景后可用，「无背景」关闭美化（#103）', (tester) async {
+    // 边界：初始两个下拉 onChanged 为空；应用默认渐变后内边距下拉可用；再次打开背景选「无背景」后恢复禁用。
+    tester.view.physicalSize = const Size(900, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final bytes = await tester.runAsync(() => _solidPng(64, 64, _blue));
+    const channel = MethodChannel('test/screenshot-beautify-none');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      channel,
+      (call) async => call.method == MethodNames.getScreenshot
+          ? {
+              'id': 'shot-none',
+              'bytes': bytes,
+              'capturedAt': 0,
+              'width': 64,
+              'height': 64,
+            }
+          : null,
+    );
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.ensureVisible(find.byKey(const Key('screenshot-beautify')));
+    await tester.tap(find.byKey(const Key('screenshot-beautify')));
+    await tester.pump();
+
+    /// 返回内边距下拉是否可用。
+    bool paddingEnabled() =>
+        tester
+            .widget<NativeGlassMenuButton<double>>(
+              find.byType(NativeGlassMenuButton<double>).first,
+            )
+            .onChanged !=
+        null;
+    expect(paddingEnabled(), isFalse);
+    await tester.tap(find.byTooltip('背景'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('apply-color')));
+    await tester.pumpAndSettle();
+    expect(paddingEnabled(), isTrue);
+    await tester.tap(find.byTooltip('背景'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('beautify-none')));
+    await tester.pumpAndSettle();
+    expect(paddingEnabled(), isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('美化行选择背景后复制输出扩出内边距的图片，贴图仍是原图，切换工具收起美化行；截图历史保留最后一次导出', (
     tester,
   ) async {
@@ -890,8 +943,13 @@ void main() {
     await tester.tap(find.byKey(const Key('screenshot-beautify')));
     await tester.pump();
     expect(find.byKey(const Key('beautify-row')), findsOneWidget);
-    await tester.tap(find.byTooltip('海洋'));
+    // 背景按钮打开通用调色盘（默认渐变页签），选渐变预设「海洋」后应用（#103）。
+    await tester.tap(find.byTooltip('背景'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('gradient-preset-1')));
     await tester.pump();
+    await tester.tap(find.byKey(const Key('apply-color')));
+    await tester.pumpAndSettle();
 
     /// key 为工具栏按钮；点击并等待导出完成。
     Future<void> press(String key) async {

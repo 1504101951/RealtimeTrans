@@ -104,6 +104,7 @@ class DrawingPreferences {
       variants[entry.key] = DrawingStyle(
         color: Color(argb),
         strokeWidth: width,
+        gradient: _gradient(value),
       );
     }
     final styles = {...defaults.styles};
@@ -119,7 +120,11 @@ class DrawingPreferences {
           width > DrawingMetrics.maxWidth) {
         throw const FormatException('绘图颜色或线宽无效。');
       }
-      styles[tool] = DrawingStyle(color: Color(argb), strokeWidth: width);
+      styles[tool] = DrawingStyle(
+        color: Color(argb),
+        strokeWidth: width,
+        gradient: _gradient(value),
+      );
     }
     final fill = raw['fillColor'] as int? ?? defaults.fillColor.toARGB32();
     final font = (raw['fontSize'] as num?)?.toDouble() ?? defaults.fontSize;
@@ -142,18 +147,27 @@ class DrawingPreferences {
     );
   }
 
-  /// 返回可跨引擎传递的独立字典；线宽/字号保持逻辑pt。
+  /// value 为单个工具或子模式的样式字典；返回其中可选的渐变，缺失即纯色（#103）。
+  static FillGradient? _gradient(Map<Object?, Object?> value) =>
+      switch (value['gradient']) {
+        final Map<Object?, Object?> gradient => FillGradient.fromMap(gradient),
+        _ => null,
+      };
+
+  /// 返回可跨引擎传递的独立字典；线宽/字号保持逻辑pt，渐变只在存在时写入。
   Map<String, Object> toMap() => {
     'tools': styles.map(
       (tool, style) => MapEntry(tool.name, {
         'color': style.color.toARGB32(),
         'width': style.strokeWidth,
+        'gradient': ?style.gradient?.toMap(),
       }),
     ),
     'variants': variants.map(
       (key, style) => MapEntry(key, {
         'color': style.color.toARGB32(),
         'width': style.strokeWidth,
+        'gradient': ?style.gradient?.toMap(),
       }),
     ),
     'fillColor': fillColor.toARGB32(),

@@ -12,6 +12,7 @@ import 'package:translate_app/src/common/constants/method_names.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:translate_app/src/common/constants/screenshot_enums.dart';
 import 'package:translate_app/src/screenshot/drawing_controls.dart';
+import 'package:translate_app/src/common/constants/drawing_metrics.dart';
 import 'package:translate_app/src/screenshot/drawing_style.dart';
 import 'package:translate_app/src/screenshot/edit_document.dart';
 
@@ -249,13 +250,13 @@ void main() {
   });
 
   testWidgets('调色盘非法HEX不提交，应用自定义色，取消不提交', (tester) async {
-    Color? result;
+    ColorFill? result;
     var cancelled = false;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: ColorPicker(
-            initial: Colors.black,
+            initial: (color: Colors.black, gradient: null),
             onApply: (v) => result = v,
             onCancel: () => cancelled = true,
           ),
@@ -270,7 +271,7 @@ void main() {
     await tester.enterText(find.byKey(const Key('color-hex')), '#123ABC');
     await tester.pump();
     await tester.tap(find.byKey(const Key('apply-color')));
-    expect(result, const Color(0xFF123ABC));
+    expect(result, (color: const Color(0xFF123ABC), gradient: null));
     result = null;
     await tester.tap(find.byKey(const Key('palette-007AFF')));
     await tester.tap(find.text('取消'));
@@ -562,5 +563,80 @@ void main() {
     expect(find.byKey(const Key('screenshot-text-field')), findsOneWidget);
     expect(find.text('keep draft'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('调色盘渐变页签：预设、编辑结束色与方向后应用带渐变的值，切回纯色应用不带渐变（#103）', (tester) async {
+    // 边界：选预设「海洋」后改结束色为 #112233、方向为 →，应用值的起始色为海洋起始色；
+    // 再切回「纯色」应用，渐变为 null。
+    final results = <ColorFill>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ColorPicker(
+            initial: (color: Colors.black, gradient: null),
+            onApply: results.add,
+            onCancel: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('渐变'));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('gradient-preset-1')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('gradient-end')));
+    await tester.pump();
+    await tester.enterText(find.byKey(const Key('color-hex')), '112233');
+    await tester.tap(find.byKey(const Key('gradient-direction-right')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('apply-color')));
+    expect(results.single, (
+      color: DrawingMetrics.gradients[1].from,
+      gradient: const FillGradient(
+        end: Color(0xFF112233),
+        direction: GradientDirection.right,
+      ),
+    ));
+    await tester.tap(find.text('纯色'));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('apply-color')));
+    expect(results.last.gradient, isNull);
+    expect(results.last.color, DrawingMetrics.gradients[1].from);
+  });
+
+  test('渐变填充图形：左端为起始色、右端为结束色；绘图偏好往返保留渐变，缺失即纯色（#103）', () async {
+    // 边界：48px 宽的实心矩形，方向 →，红到蓝；第 1 列接近红、第 46 列接近蓝。
+    final doc = EditDocument()..loadCapture(await fixture(), 48, 48);
+    doc.addAnnotation(
+      EditAnnotation(
+        id: 'g',
+        kind: AnnotationKind.rectangle,
+        shape: ShapeVariant.filledRectangle,
+        bounds: const Rect.fromLTWH(0, 0, 48, 48),
+        style: const DrawingStyle(
+          color: Color(0xFFFF0000),
+          gradient: FillGradient(
+            end: Color(0xFF0000FF),
+            direction: GradientDirection.right,
+          ),
+        ),
+      ),
+    );
+    final pixels = await rgba(await doc.renderPng());
+    (int, int) redBlue(int x) =>
+        (pixels[(24 * 48 + x) * 4], pixels[(24 * 48 + x) * 4 + 2]);
+    expect(redBlue(1).$1, greaterThan(240));
+    expect(redBlue(46).$2, greaterThan(240));
+
+    final prefs = DrawingPreferences().copyWith(
+      tool: ScreenshotTool.arrow,
+      style: const DrawingStyle(gradient: FillGradient(end: Color(0xFF00FF00))),
+    );
+    final restored = DrawingPreferences.fromMap(prefs.toMap());
+    expect(
+      restored.styleFor(ScreenshotTool.arrow).gradient,
+      const FillGradient(end: Color(0xFF00FF00)),
+    );
+    expect(restored.styleFor(ScreenshotTool.text).gradient, isNull);
   });
 }

@@ -56,6 +56,9 @@ class ScreenshotDefaults {
   static const openableLinkSchemes = {'http', 'https'};
 }
 
+/// 渐变方向：→、↓、↘、↗；名称用于绘图偏好持久化（#103）。
+enum GradientDirection { right, down, downRight, upRight }
+
 /// 图形工具的四种模式；名称用于偏好持久化。
 enum ShapeVariant {
   rectangle,

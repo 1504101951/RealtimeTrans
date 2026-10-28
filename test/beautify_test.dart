@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:translate_app/src/common/constants/drawing_metrics.dart';
 import 'package:translate_app/src/screenshot/beautify.dart';
+import 'package:translate_app/src/screenshot/drawing_style.dart';
 import 'package:translate_app/src/screenshot/edit_document.dart';
 
 /// width/height/color 为纯色原图参数；返回 PNG 字节。
@@ -59,15 +60,19 @@ void main() {
     // 边界：倍率 2、内边距 10pt → 每侧 20px；圆角 6pt → 12px，内容左上角像素落在圆角外。
     final source = await solidPng(40, 30, blue);
     final doc = EditDocument()..loadCapture(source, 40, 30);
-    const style = BeautifyStyle(
-      background: 1,
+    final preset = DrawingMetrics.gradients[1];
+    final style = BeautifyStyle(
+      background: (
+        color: preset.from,
+        gradient: FillGradient(end: preset.to),
+      ),
       padding: 10,
       cornerRadius: 6,
       shadow: false,
     );
     final framed = await decode(await doc.renderPng(beautify: style, unit: 2));
     expect((framed.$1, framed.$2), (80, 70));
-    final start = BeautifyMetrics.backgrounds[1].from;
+    final start = preset.from;
     final corner = pixel(framed, 0, 0);
     expect((corner.$1 - (start.r * 255).round()).abs(), lessThan(4));
     expect((corner.$2 - (start.g * 255).round()).abs(), lessThan(4));

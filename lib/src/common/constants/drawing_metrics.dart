@@ -34,12 +34,9 @@ abstract final class DrawingMetrics {
     Color(0xFFFFFFFF),
     Color(0xFF000000),
   ];
-}
 
-/// 截图美化的预设与数值（#103），全部对应样式Spec #67；长度单位为屏幕点。
-abstract final class BeautifyMetrics {
-  /// 渐变背景预设，按美化行顺序排列；每项为左上到右下的两色渐变及名称。
-  static const backgrounds = <({String name, Color from, Color to})>[
+  /// 渐变预设（#103）：名称与左上到右下的两色，调色盘渐变页签与美化背景共用。
+  static const gradients = <({String name, Color from, Color to})>[
     (name: '晨曦', from: Color(0xFFFF9A8B), to: Color(0xFFFF6A88)),
     (name: '海洋', from: Color(0xFF4FACFE), to: Color(0xFF00F2FE)),
     (name: '薄荷', from: Color(0xFF43E97B), to: Color(0xFF38F9D7)),
@@ -48,13 +45,23 @@ abstract final class BeautifyMetrics {
     (name: '石墨', from: Color(0xFF434343), to: Color(0xFF000000)),
   ];
 
-  /// 内边距选项及按钮文字。
-  static const paddings = <({double value, String label})>[
-    (value: 32, label: '小'),
-    (value: 64, label: '中'),
-    (value: 96, label: '大'),
-  ];
+  /// 渐变页签：起始色/结束色色块按钮尺寸、选中边框宽、方向按钮边长与预览条高度。
+  static const wellWidth = 48.0;
+  static const wellHeight = 24.0;
+  static const wellSelectedBorder = 2.0;
+  static const directionButton = 32.0;
+  static const previewHeight = 24.0;
+}
+
+/// 截图美化的预设与数值（#103），全部对应样式Spec #67；长度单位为屏幕点。
+abstract final class BeautifyMetrics {
+  /// 内边距下拉的选项（pt）与默认值。
+  static const paddings = <double>[32, 64, 96];
   static const defaultPadding = 64.0;
+
+  /// 美化行下拉宽度：内边距 112pt、圆角 88pt，高 32pt（#103）。
+  static const paddingMenuWidth = 112.0;
+  static const radiusMenuWidth = 88.0;
 
   /// 圆角选项：直角与圆角。
   static const squareRadius = 0.0;

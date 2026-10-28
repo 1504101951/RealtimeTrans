@@ -128,11 +128,6 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
   DrawingStyle get _nextStyle => _drawing.styleFor(_styleTool);
   set _nextStyle(DrawingStyle value) =>
       _drawing = _drawing.copyWith(tool: _styleTool, style: value);
-  Color get _fillColor => _drawing.styleFor(ScreenshotTool.rect).color;
-  set _fillColor(Color value) => _drawing = _drawing.copyWith(
-    tool: ScreenshotTool.rect,
-    style: _drawing.styleFor(ScreenshotTool.rect).copyWith(color: value),
-  );
   ShapeMode get _shapeMode => _drawing.brushMode;
   ShapeVariant get _styleShape => _styleSelection?.shape ?? _drawing.shape;
   String? _selectedShapeId;
@@ -191,7 +186,8 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
 
   /// 文字工具当前颜色。
   // 输入草稿与已选文字不写入工具默认值；只有编辑新文字的属性才更新偏好。
-  Color _textColor = ScreenshotDefaults.strokeColor;
+  /// 文字的颜色与可选渐变；新文字与正在编辑的文字共用（#103）。
+  DrawingStyle _textStyle = const DrawingStyle();
   double _fontSize = ScreenshotDefaults.fontSize;
 
   /// 已提交且当前选中的文字标注 id。
@@ -390,7 +386,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       _drawing = DrawingPreferences.fromMap(
         value[PreferenceKeys.screenshotDrawing] as Map?,
       );
-      _textColor = _drawing.styles[ScreenshotTool.text]!.color;
+      _textStyle = _drawing.styles[ScreenshotTool.text]!;
       _fontSize = _drawing.fontSize;
       _message = value['error'] as String?;
       _failed = _message != null;
@@ -520,19 +516,77 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     return null;
   }
 
+  /// 无参数；打开美化背景调色盘：应用后开启或更新美化（含阴影勾选），「无背景」关闭美化，取消不改变，
+  /// 返回弹窗关闭的 Future（#103）。弹窗期间原生按键按文字输入处理，避免 HEX 数字触发工具。
+  Future<void> _editBeautifyBackground() async {
+    final captureId = _capture['id'];
+    final current = _beautify;
+    final preset = DrawingMetrics.gradients.first;
+    var shadow = current?.shadow ?? true;
+    _dialogOpen = true;
+    _setTextInput(true);
+    final result = await showDialog<Object>(
+      context: _editorKey.currentContext!,
+      builder: (dialogContext) => Dialog(
+        child: ColorPicker(
+          // 未开启美化时默认渐变「晨曦」。
+          initial:
+              current?.background ??
+              (color: preset.from, gradient: FillGradient(end: preset.to)),
+          onApply: (fill) => Navigator.pop(dialogContext, fill),
+          onCancel: () => Navigator.pop(dialogContext),
+          footer: StatefulBuilder(
+            builder: (context, setLocal) => Row(
+              children: [
+                Checkbox(
+                  key: const Key('beautify-shadow'),
+                  value: shadow,
+                  onChanged: (value) => setLocal(() => shadow = value!),
+                ),
+                const Text('阴影'),
+                const Spacer(),
+                NativeGlassSurface(
+                  material: true,
+                  child: TextButton(
+                    key: const Key('beautify-none'),
+                    onPressed: () => Navigator.pop(dialogContext, false),
+                    child: const Text('无背景'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    _dialogOpen = false;
+    if (!mounted || captureId != _capture['id']) return;
+    _setTextInput(false);
+    _focusNode.requestFocus();
+    if (result == false) {
+      setState(() => _beautify = null);
+    } else if (result is ColorFill) {
+      setState(
+        () => _beautify = (current ?? BeautifyStyle(background: result))
+            .copyWith(background: result, shadow: shadow),
+      );
+    }
+  }
+
   /// 弹出独立控件；返回前保持原生按键处于文字输入作用域，避免HEX数字触发工具。
   Future<void> _editDrawingStyle({required bool color}) async {
     final editingText = _textInputOpen;
     final selected = editingText ? _previewAnnotation : _styleSelection;
     final captureId = _capture['id'];
     final tool = _styleTool;
-    final initialColor =
-        selected?.color ??
+    // 调色盘初值：选中标注的颜色与渐变，否则为当前工具下一笔的样式（#103）。
+    final initialFill =
+        selected?.style.fill ??
         (tool == ScreenshotTool.rect && _styleShape.filled
-            ? _fillColor
+            ? _drawing.styleFor(ScreenshotTool.rect).fill
             : tool == ScreenshotTool.text
-            ? _textColor
-            : _nextStyle.color);
+            ? _textStyle.fill
+            : _nextStyle.fill);
     final initialWidth = selected == null
         ? _nextStyle.strokeWidth
         : selected.strokeWidth / _pixelRatio;
@@ -543,7 +597,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       builder: (dialogContext) => Dialog(
         child: color
             ? ColorPicker(
-                initial: initialColor,
+                initial: initialFill,
                 onApply: (value) => Navigator.pop(dialogContext, value),
                 onCancel: () => Navigator.pop(dialogContext),
               )
@@ -564,15 +618,15 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     }
     if (result == null) return;
     setState(() {
-      if (editingText && result is Color) {
-        _textColor = result;
-        _previewAnnotation = _previewAnnotation?.copyWith(color: result);
+      if (editingText && result is ColorFill) {
+        _textStyle = _textStyle.copyWith(fill: result);
+        _previewAnnotation = _previewAnnotation?.copyWith(
+          style: _previewAnnotation!.style.copyWith(fill: result),
+        );
         if (_editingTextId == null) {
           _drawing = _drawing.copyWith(
             tool: ScreenshotTool.text,
-            style: _drawing.styles[ScreenshotTool.text]!.copyWith(
-              color: result,
-            ),
+            style: _drawing.styles[ScreenshotTool.text]!.copyWith(fill: result),
           );
         }
       } else if (selected != null) {
@@ -581,19 +635,25 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
             .firstOrNull;
         if (current == null) return;
         final style = current.style.copyWith(
-          color: result is Color ? result : null,
+          fill: result is ColorFill ? result : null,
           strokeWidth: result is double ? result * _pixelRatio : null,
         );
         if (style.color != current.color ||
+            style.gradient != current.style.gradient ||
             style.strokeWidth != current.strokeWidth) {
           _document.updateAnnotation(current.copyWith(style: style));
         }
-      } else if (result is Color) {
+      } else if (result is ColorFill) {
         if (tool == ScreenshotTool.rect && _styleShape.filled) {
-          _fillColor = result;
+          _drawing = _drawing.copyWith(
+            tool: ScreenshotTool.rect,
+            style: _drawing.styleFor(ScreenshotTool.rect).copyWith(fill: result),
+          );
         } else {
-          _nextStyle = _nextStyle.copyWith(color: result);
-          if (tool == ScreenshotTool.text) _textColor = result;
+          _nextStyle = _nextStyle.copyWith(fill: result);
+          if (tool == ScreenshotTool.text) {
+            _textStyle = _textStyle.copyWith(fill: result);
+          }
         }
       } else if (result is double) {
         _nextStyle = _nextStyle.copyWith(strokeWidth: result);
@@ -1560,7 +1620,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
         id: 'preview',
         kind: AnnotationKind.text,
         bounds: Rect.fromPoints(imagePoint, imagePoint),
-        color: _textColor,
+        style: _textStyle,
         fontSize: _toImageFont(_fontSize),
       );
     });
@@ -1575,7 +1635,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       _editingTextId = annotation.id;
       _setTextInput(true);
       _textController.text = annotation.text;
-      _textColor = annotation.color;
+      _textStyle = annotation.style;
       _fontSize = _nearestVisualFont(_toVisualFont(annotation.fontSize));
       _dragStart = annotation.bounds.topLeft;
       _previewAnnotation = annotation;
@@ -1711,7 +1771,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           id: 'preview',
           kind: AnnotationKind.text,
           bounds: bounds,
-          color: _textColor,
+          style: _textStyle,
           fontSize: _toImageFont(_fontSize),
         );
       case ScreenshotTool.brush:
@@ -1734,8 +1794,8 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           id: 'preview',
           kind: AnnotationKind.rectangle,
           shape: _drawing.shape,
+          // 图形工具的下一笔样式已按当前形状（含填充）取得，颜色与渐变一并沿用（#103）。
           style: _nextStyle.copyWith(
-            color: _drawing.shape.filled ? _fillColor : _nextStyle.color,
             strokeWidth: _nextStyle.strokeWidth * _pixelRatio,
           ),
           bounds: _drawing.shape.circular ? _circleBounds(bounds) : bounds,
@@ -1767,7 +1827,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
 
   /// point 为文字框左上角；width 为拖出的宽度，缺省用默认宽度。打开就地输入。
   void _openTextInput(Offset point, {double? width}) {
-    _textColor = _drawing.styles[ScreenshotTool.text]!.color;
+    _textStyle = _drawing.styles[ScreenshotTool.text]!;
     _fontSize = _drawing.fontSize;
     final box = _newTextBox(point, width: width);
     setState(() {
@@ -1783,7 +1843,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
         id: 'preview',
         kind: AnnotationKind.text,
         bounds: box,
-        color: _textColor,
+        style: _textStyle,
         fontSize: _toImageFont(_fontSize),
       );
     });
@@ -1832,7 +1892,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
         current.copyWith(
           text: text,
           bounds: bounds,
-          color: _textColor,
+          style: _textStyle,
           fontSize: fontSize,
         ),
       );
@@ -1845,7 +1905,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
         kind: AnnotationKind.text,
         bounds: bounds,
         text: text,
-        color: _textColor,
+        style: _textStyle,
         fontSize: fontSize,
       ),
     );
@@ -2230,13 +2290,13 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
                       : 0,
                   applicationCount: _recordingApplications.length,
                   beautify: _beautify,
-                  // 美化行：无背景 + 渐变 + 内边距 + 两种圆角 + 阴影；比例行：全部比例预设。
+                  // 美化行：背景按钮 + 内边距与圆角下拉，下拉宽度按 32pt 按钮加 4pt 间距折算格数；
+                  // 比例行：全部比例预设。
                   settingsRowItems: switch (_expandedRow) {
                     _ExpandedRow.beautify =>
                       1 +
-                          BeautifyMetrics.backgrounds.length +
-                          BeautifyMetrics.paddings.length +
-                          3,
+                          ((BeautifyMetrics.paddingMenuWidth + 4) / 36).ceil() +
+                          ((BeautifyMetrics.radiusMenuWidth + 4) / 36).ceil(),
                     _ExpandedRow.ratio => CropMetrics.ratios.length,
                     _ => 0,
                   },
@@ -2349,7 +2409,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     if (_textInputOpen && _previewAnnotation != null) {
       final preview = _previewAnnotation!;
       _previewAnnotation = preview.copyWith(
-        color: _textColor,
+        style: _textStyle,
         fontSize: imageFont,
         bounds: Rect.fromLTWH(
           preview.bounds.left,
@@ -2372,7 +2432,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     if (current == null || current.kind != AnnotationKind.text) return;
     _document.updateAnnotation(
       current.copyWith(
-        color: _textColor,
+        style: _textStyle,
         fontSize: imageFont,
         // 字号变化后高度按内容重新计算，宽度不变。
         bounds: Rect.fromLTWH(
@@ -2393,7 +2453,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
   void _nudgeFontSize(int delta) {
     final selected = _textInputOpen ? _previewAnnotation : _styleSelection;
     if (selected?.kind == AnnotationKind.text) {
-      _textColor = selected!.color;
+      _textStyle = selected!.style;
       _fontSize = _nearestVisualFont(_toVisualFont(selected.fontSize));
     }
     final sizes = ScreenshotDefaults.fontSizes;
@@ -2688,73 +2748,63 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     final rows = <Widget>[
       row(top, 'screenshot-tools-row', loading: _busy),
       if (attributes.isNotEmpty) row(attributes, 'screenshot-attributes-row'),
-      // 美化行：背景、内边距、圆角与阴影；未选背景时其余选项不可用（#103）。
+      // 美化行：背景调色盘按钮、内边距与圆角下拉；未开启美化时下拉不可用（#103）。
       if (_beautifyExpanded)
         captureRow('beautify-row', [
           captureButton(
-            '无背景',
-            const Icon(Icons.block, size: 16),
-            () => setState(() => _beautify = null),
-            selected: beautify == null,
-          ),
-          for (final (index, preset) in BeautifyMetrics.backgrounds.indexed)
-            captureButton(
-              preset.name,
-              Container(
-                width: 16,
-                height: 16,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [preset.from, preset.to],
-                  ),
-                ),
-              ),
-              () => setState(
-                () => _beautify =
-                    beautify?.copyWith(background: index) ??
-                    BeautifyStyle(background: index),
-              ),
-              selected: beautify?.background == index,
-            ),
-          for (final option in BeautifyMetrics.paddings)
-            captureButton(
-              '内边距${option.label}',
-              Text(option.label),
-              beautify == null
-                  ? null
-                  : () => setState(
-                      () =>
-                          _beautify = beautify.copyWith(padding: option.value),
-                    ),
-              selected: beautify?.padding == option.value,
-            ),
-          for (final (label, icon, radius) in const [
-            ('直角', Icons.crop_square, BeautifyMetrics.squareRadius),
-            ('圆角', Icons.rounded_corner, BeautifyMetrics.roundRadius),
-          ])
-            captureButton(
-              label,
-              Icon(icon, size: 16),
-              beautify == null
-                  ? null
-                  : () => setState(
-                      () => _beautify = beautify.copyWith(cornerRadius: radius),
-                    ),
-              selected: beautify?.cornerRadius == radius,
-            ),
-          captureButton(
-            '阴影',
-            const Icon(Icons.layers, size: 16),
+            '背景',
             beautify == null
-                ? null
-                : () => setState(
-                    () =>
-                        _beautify = beautify.copyWith(shadow: !beautify.shadow),
+                ? const Icon(Icons.block, size: 16)
+                : Container(
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: beautify.background.gradient == null
+                          ? beautify.background.color
+                          : null,
+                      gradient: switch (beautify.background.gradient) {
+                        final gradient? => LinearGradient(
+                          colors: [beautify.background.color, gradient.end],
+                        ),
+                        null => null,
+                      },
+                    ),
                   ),
-            selected: beautify?.shadow == true,
+            _editBeautifyBackground,
+            selected: beautify != null,
+          ),
+          SizedBox(
+            width: BeautifyMetrics.paddingMenuWidth,
+            height: 32,
+            child: NativeGlassMenuButton<double>(
+              value: beautify?.padding ?? BeautifyMetrics.defaultPadding,
+              items: {
+                for (final value in BeautifyMetrics.paddings)
+                  value: '内边距 ${value.round()}',
+              },
+              onChanged: beautify == null
+                  ? null
+                  : (value) => setState(
+                      () => _beautify = beautify.copyWith(padding: value),
+                    ),
+            ),
+          ),
+          SizedBox(
+            width: BeautifyMetrics.radiusMenuWidth,
+            height: 32,
+            child: NativeGlassMenuButton<double>(
+              value: beautify?.cornerRadius ?? BeautifyMetrics.roundRadius,
+              items: {
+                BeautifyMetrics.squareRadius: '直角',
+                BeautifyMetrics.roundRadius: '圆角',
+              },
+              onChanged: beautify == null
+                  ? null
+                  : (value) => setState(
+                      () => _beautify = beautify.copyWith(cornerRadius: value),
+                    ),
+            ),
           ),
         ]),
       // 比例行：自由与固定宽高比，锁定后框选与调整保持比例（#106）。
@@ -3059,7 +3109,8 @@ class _EditorSurfaceState extends State<_EditorSurface> {
           final maxItems = [
             widget.toolbarItemCount,
             widget.secondaryItemCount,
-            if (widget.recordingRows > 0) 5,
+            // 录制目标行：三个目标、录制选项、开始与取消共 6 个按钮（#129）。
+            if (widget.recordingRows > 0) 6,
             if (widget.recordingRows > 1) widget.applicationCount,
             if (widget.settingsRowItems > 0) widget.settingsRowItems,
           ].reduce(math.max);

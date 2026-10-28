@@ -1,8 +1,9 @@
 import 'package:flutter/painting.dart';
 
 import '../common/constants/drawing_metrics.dart';
+import 'drawing_style.dart';
 
-/// 一次截图的美化参数（#103）；background 为 BeautifyMetrics.backgrounds 的下标，长度单位为屏幕点。
+/// 一次截图的美化参数（#103）；background 为调色盘选择的纯色或渐变，长度单位为屏幕点。
 class BeautifyStyle {
   /// 各字段含义见类说明；默认内边距 64pt、圆角 12pt、开启阴影。
   const BeautifyStyle({
@@ -11,14 +12,14 @@ class BeautifyStyle {
     this.cornerRadius = BeautifyMetrics.roundRadius,
     this.shadow = true,
   });
-  final int background;
+  final ColorFill background;
   final double padding;
   final double cornerRadius;
   final bool shadow;
 
   /// 参数为需替换的字段；返回新参数，未指定字段保留。
   BeautifyStyle copyWith({
-    int? background,
+    ColorFill? background,
     double? padding,
     double? cornerRadius,
     bool? shadow,
@@ -50,16 +51,13 @@ void paintBeautifyBackdrop(
     Path()..addRect(outer),
     Path()..addRRect(inner),
   );
-  final preset = BeautifyMetrics.backgrounds[style.background];
-  canvas.drawPath(
-    band,
-    Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [preset.from, preset.to],
-      ).createShader(outer),
-  );
+  // 背景为纯色或沿外框铺满的渐变，与标注共用 FillGradient 的方向规则。
+  final background = style.background;
+  final paint = Paint()..color = background.color;
+  if (background.gradient case final gradient?) {
+    paint.shader = gradient.shader(background.color, outer);
+  }
+  canvas.drawPath(band, paint);
   if (!style.shadow) return;
   // 阴影只画在背景上，不覆盖截图内容。
   canvas.save();
