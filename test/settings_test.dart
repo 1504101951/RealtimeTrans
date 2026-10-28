@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:translate_app/src/settings/service_config.dart';
+import 'package:translate_app/src/common/constants/text_mode.dart';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:translate_app/src/settings/app_settings.dart';
@@ -133,6 +134,22 @@ void main() {
       () => service.validateCredentials({'apiKey': 'dummy', 'appId': 'app'}),
       returnsNormally,
     );
+  });
+
+  test('处理提示词缺省为默认值，修改后可往返保存，空提示词被拒绝（#100）', () {
+    // 边界：未保存过时三种模式都等于默认提示词；只改润色后往返仍保持其余两种为默认；润色改为空白时校验失败。
+    final settings = AppSettings(primaryLanguage: 'zh-CN');
+    expect(settings.assistPrompts, defaultAssistPrompts);
+    settings.assistPrompts[TextMode.polish] = '只改润色';
+    final restored = AppSettings.fromMap(settings.toMap());
+    expect(restored.assistPrompts[TextMode.polish], '只改润色');
+    expect(
+      restored.assistPrompts[TextMode.explain],
+      defaultAssistPrompts[TextMode.explain],
+    );
+    expect(restored.validate, returnsNormally);
+    restored.assistPrompts[TextMode.polish] = '  ';
+    expect(restored.validate, throwsFormatException);
   });
 
   test('输入翻译快捷键默认 ⌃⌥R 可往返保存，三个全局快捷键任意两个相同都被拒绝', () {

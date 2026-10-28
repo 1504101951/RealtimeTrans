@@ -29,6 +29,47 @@ class RecordingProvider implements TranslationProvider {
 
 void main() {
   final language = LanguageDirection(primaryCode: 'zh-CN', secondaryCode: 'en');
+  test('卡片服务菜单：切换服务只影响本卡片，润色时非模型服务明确失败，新选区回到默认服务（#100）', () async {
+    // 边界：默认服务译出「默认」，菜单选 model 译出「模型」；润色模式选非模型服务 plain 时失败且不调用默认模型；
+    // 新选区开始后 serviceOverride 清空，再翻译使用默认服务。
+    final model = RecordingProvider(
+      events: const [TranslationUpdate('模型'), TranslationCompleted()],
+    );
+    final session =
+        SelectionSession(
+            detectLanguage: (_) async => 'en',
+            provider: RecordingProvider(
+              events: const [TranslationUpdate('默认'), TranslationCompleted()],
+            ),
+            language: language,
+          )
+          ..serviceProviderFor = (serviceId, mode) => serviceId == 'model'
+              ? model
+              : mode == TextMode.translate
+              ? RecordingProvider()
+              : null;
+    addTearDown(session.dispose);
+    session.begin(sessionId: 's1', text: 'Hello');
+    await session.activate();
+    expect(session.snapshot.translatedText, '默认');
+
+    await session.switchService('model');
+    expect(session.serviceOverride, 'model');
+    expect(session.snapshot.translatedText, '模型');
+    expect(session.activeProvider, same(model));
+
+    await session.switchMode(TextMode.polish);
+    expect(model.requests.last.targetLanguage, 'en');
+    await session.switchService('plain');
+    expect(session.snapshot.phase, TranslationPhase.failed);
+    expect(session.snapshot.message, SelectionSession.assistUnavailable);
+
+    session.begin(sessionId: 's2', text: 'Hi');
+    expect(session.serviceOverride, isNull);
+    await session.activate();
+    expect(session.snapshot.translatedText, '默认');
+  });
+
   test('切换模式对同一原文重新处理：解释用主要语言，润色保持原文语言，无模型服务时明确失败', () async {
     // 边界：原文识别为英文、主要语言为简体中文；翻译目标为中文，解释目标也为中文，润色目标为英文本身。
     final assist = RecordingProvider(

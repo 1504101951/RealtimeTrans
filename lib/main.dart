@@ -25,6 +25,7 @@ import 'src/settings/settings_app.dart';
 import 'src/settings/settings_controller.dart';
 import 'src/translation/live_region_session.dart';
 import 'src/translation/provider_selection.dart';
+import 'src/common/constants/text_mode.dart';
 
 /// 无参数；启动主引擎，初始化失败时让原生弹出实际错误后再抛出，返回启动完成的 Future（#126）。
 Future<void> main() async {
@@ -94,6 +95,11 @@ Future<void> _startApplication(MacosPlatformBridge bridge) async {
   // 润色、纠错与解释在切换时按已提交配置取得默认模型服务（#100）。
   session.assistProviderFor = (mode) =>
       assistProviderForSettings(settings.current, bridge, mode);
+  // 卡片服务菜单按已提交配置构造所选服务：翻译模式取翻译服务，其余模式取模型服务（#100）。
+  session.serviceProviderFor = (serviceId, mode) => mode == TextMode.translate
+      ? providerForService(settings.current, bridge, serviceId)
+      : assistProviderForService(settings.current, bridge, mode, serviceId);
+  session.serviceChoices = () => serviceChoices(settings.current);
 
   // handleApplicationRequests只路由跨引擎请求；同引擎直接调用所属模块，不绕回原生通道。
   bridge.handleApplicationRequests((call) async {

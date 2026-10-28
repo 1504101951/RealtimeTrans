@@ -267,6 +267,22 @@ class _TranslateAppState extends State<TranslateApp> {
     );
   }
 
+  /// serviceId 为卡片服务菜单选中的服务；用它重新处理当前原文，翻译模式成功时记录历史，返回结束的 Future（#100）。
+  Future<void> _switchService(String serviceId) async {
+    final id = widget.session.sessionId;
+    if (id == null) return;
+    // 结果会被替换，先停止朗读旧内容。
+    unawaited(widget.bridge.stopSpeech());
+    final sourceLabel = _sourceAppName;
+    await widget.session.switchService(serviceId);
+    _record(
+      id,
+      widget.session.activeProvider,
+      widget.session.activeLanguage,
+      sourceLabel,
+    );
+  }
+
   /// id 为发起时的会话，provider/language 为冻结的服务与方向，sourceLabel 为来源应用名。
   /// 仅在会话未被替换、处于翻译模式且完整成功时写入历史，无返回值。
   void _record(
@@ -316,6 +332,7 @@ class _TranslateAppState extends State<TranslateApp> {
         onActivate: _activate,
         onDismiss: _dismiss,
         onMode: (mode) => unawaited(_switchMode(mode)),
+        onService: (serviceId) => unawaited(_switchService(serviceId)),
         onSpeak: _speak,
         onAddVocabulary: _addVocabulary,
         onDrag: () {

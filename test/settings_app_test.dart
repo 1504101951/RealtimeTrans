@@ -5,6 +5,7 @@ import 'package:translate_app/src/common/widgets/native_glass.dart';
 import 'package:translate_app/src/common/constants/method_names.dart';
 import 'package:translate_app/src/common/constants/channel_names.dart';
 import 'package:translate_app/src/common/constants/preference_keys.dart';
+import 'package:translate_app/src/common/constants/text_mode.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -403,6 +404,71 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('15 fps'), findsOneWidget);
     expect(tester.widget<TextField>(width).controller!.text, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('处理提示词：恢复默认、空提示词不能保存，保存后自动提交三种提示词（#100）', (tester) async {
+    // 边界：初始润色为自定义值时「恢复默认」可用，点击后回到默认值且按钮禁用；
+    // 纠错清空时显示「提示词不能为空。」且「保存」禁用；填回后保存，提交的偏好含三种提示词。
+    const channel = MethodChannel(ChannelNames.settings);
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    var settings = <String, Object?>{
+      'revision': 0,
+      PreferenceKeys.assistPrompts[TextMode.polish]!: '自定义润色',
+    };
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == MethodNames.systemStatus) {
+        return {'accessibility': true};
+      }
+      if (call.method == MethodNames.getSettings) return settings;
+      if (call.method == MethodNames.saveSettings) {
+        final draft = Map<String, Object?>.from(call.arguments as Map)
+          ..remove('credentials');
+        settings = {...draft, 'revision': (settings['revision'] as int) + 1};
+        return settings;
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(const SettingsApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('翻译'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('编辑提示词…'));
+    await tester.tap(find.text('编辑提示词…'));
+    await tester.pumpAndSettle();
+
+    TextButton restore(String label) =>
+        tester.widget<TextButton>(find.byKey(ValueKey('恢复默认-$label')));
+    expect(restore('润色').onPressed, isNotNull);
+    expect(restore('纠错').onPressed, isNull);
+    await tester.tap(find.byKey(const ValueKey('恢复默认-润色')));
+    await tester.pumpAndSettle();
+    expect(restore('润色').onPressed, isNull);
+
+    await tester.enterText(find.byKey(const ValueKey('提示词-纠错')), '');
+    await tester.pumpAndSettle();
+    expect(find.text('提示词不能为空。'), findsOneWidget);
+    FilledButton save() =>
+        tester.widget<FilledButton>(find.widgetWithText(FilledButton, '保存'));
+    expect(save().onPressed, isNull);
+    await tester.enterText(find.byKey(const ValueKey('提示词-纠错')), '只纠错');
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+    expect(
+      settings[PreferenceKeys.assistPrompts[TextMode.polish]!],
+      defaultAssistPrompts[TextMode.polish],
+    );
+    expect(settings[PreferenceKeys.assistPrompts[TextMode.correct]!], '只纠错');
+    expect(
+      settings[PreferenceKeys.assistPrompts[TextMode.explain]!],
+      defaultAssistPrompts[TextMode.explain],
+    );
     expect(tester.takeException(), isNull);
   });
   testWidgets('截图页确认动作：下拉只提供复制图片与复制并保存，选择后自动保存（#111）', (tester) async {

@@ -11,6 +11,9 @@ class ServiceConfig {
     this.maxOutputTokens = 4096,
   });
   static const builtinId = 'unofficial-google';
+
+  /// 内置谷歌翻译在设置页与卡片服务菜单中的名称（#100）。
+  static const builtinName = '谷歌翻译';
   static const kinds = {
     'baidu': '百度翻译',
     'google': '谷歌翻译',

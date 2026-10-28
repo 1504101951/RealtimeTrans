@@ -3,6 +3,7 @@ import '../common/constants/appearance_modes.dart';
 import '../common/constants/preference_keys.dart';
 import '../common/constants/screenshot_enums.dart';
 import '../common/constants/shortcut_keys.dart';
+import '../common/constants/text_mode.dart';
 import '../translation/glossary.dart';
 import '../translation/language_direction.dart';
 import 'service_config.dart';
@@ -38,12 +39,14 @@ class AppSettings {
     this.launchAtLogin = false,
     Map<String, String>? excludedApps,
     List<GlossaryEntry>? glossary,
+    Map<TextMode, String>? assistPrompts,
     this.defaultServiceId = ServiceConfig.builtinId,
     List<ServiceConfig>? services,
     ScreenshotToolbarPreferences? screenshotToolbar,
     DrawingPreferences? drawing,
   }) : excludedApps = excludedApps ?? {},
        glossary = glossary ?? [],
+       assistPrompts = {...defaultAssistPrompts, ...?assistPrompts},
        services = services ?? [],
        screenshotToolbar = screenshotToolbar ?? ScreenshotToolbarPreferences(),
        drawing = drawing ?? DrawingPreferences();
@@ -102,6 +105,9 @@ class AppSettings {
 
   /// 术语表；只对模型服务的翻译模式生效，按目标语言与原文命中后写入请求（#104）。
   final List<GlossaryEntry> glossary;
+
+  /// 润色、纠错、解释的系统提示词，所有模型服务共用；缺省为 defaultAssistPrompts（#100）。
+  final Map<TextMode, String> assistPrompts;
   String defaultServiceId;
   final List<ServiceConfig> services;
 
@@ -194,12 +200,20 @@ class AppSettings {
         for (final entry in map[PreferenceKeys.glossary] as List? ?? [])
           GlossaryEntry.fromMap(entry as Map),
       ],
+      assistPrompts: {
+        for (final entry in PreferenceKeys.assistPrompts.entries)
+          if (map[entry.value] case final String prompt) entry.key: prompt,
+      },
     );
   }
 
   /// 无参数；校验可执行的语言方向及系统快捷键，非法配置抛 FormatException。
   void validate() {
     screenshotToolbar.validate();
+    // 处理提示词为空时模型无从执行（#100）。
+    if (assistPrompts.values.any((prompt) => prompt.trim().isEmpty)) {
+      throw const FormatException('处理提示词不能为空。');
+    }
     if (gifFramesPerSecond < 1 ||
         gifFramesPerSecond > 30 ||
         (gifMaximumWidth != null && gifMaximumWidth! < 1)) {
@@ -299,6 +313,8 @@ class AppSettings {
     PreferenceKeys.launchAtLogin: launchAtLogin,
     PreferenceKeys.excludedApps: excludedApps,
     PreferenceKeys.glossary: [for (final entry in glossary) entry.toMap()],
+    for (final entry in PreferenceKeys.assistPrompts.entries)
+      entry.value: assistPrompts[entry.key]!,
   };
 
   /// 无参数；返回当前主要/次要语言决定的翻译方向规则。

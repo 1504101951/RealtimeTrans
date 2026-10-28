@@ -1,5 +1,6 @@
 import 'package:translate_app/src/common/constants/selection_gesture_types.dart';
 import 'package:translate_app/src/common/constants/method_names.dart';
+import 'package:translate_app/src/common/constants/text_mode.dart';
 import 'package:translate_app/src/common/constants/bridge_event_types.dart';
 
 import 'dart:async';
@@ -196,6 +197,7 @@ void main() {
             onDismiss: session.dismiss,
             onDrag: () => drags += 1,
             onMode: session.switchMode,
+            onService: session.switchService,
             onSpeak: (_) {},
             onAddVocabulary: () {},
           ),
@@ -269,6 +271,7 @@ void main() {
           onDismiss: () {},
           onDrag: () {},
           onMode: (_) {},
+          onService: (_) {},
           onSpeak: spoken.add,
           onAddVocabulary: () {},
         ),
@@ -317,6 +320,7 @@ void main() {
           onDismiss: () {},
           onDrag: () {},
           onMode: (_) {},
+          onService: (_) {},
           onSpeak: (_) {},
           onAddVocabulary: () {},
         ),
@@ -373,6 +377,7 @@ void main() {
           onDismiss: session.dismiss,
           onDrag: () {},
           onMode: session.switchMode,
+          onService: session.switchService,
           onSpeak: (_) {},
           onAddVocabulary: () {},
         ),
@@ -433,5 +438,60 @@ void main() {
     expect(find.byTooltip('复制原文'), findsOneWidget);
     expect(find.byTooltip('复制译文'), findsNothing);
     expect(find.text('今天天气很好'), findsOneWidget);
+  });
+
+  testWidgets('卡片服务菜单：翻译模式列出全部服务，润色模式只列模型服务与当前服务（#100）', (tester) async {
+    // 边界：三项服务中只有 gpt 为模型服务；润色模式下当前为默认的谷歌翻译，菜单含谷歌翻译与 gpt，不含 Apple；
+    // 选择 gpt 时交回其 id。
+    final session =
+        SelectionSession(
+            provider: _Provider(),
+            detectLanguage: (_) async => 'en',
+          )
+          ..serviceChoices = () => const [
+            (id: 'google', name: '谷歌翻译', isModel: false, isDefault: true),
+            (id: 'gpt', name: 'GPT', isModel: true, isDefault: false),
+            (id: 'apple', name: 'Apple', isModel: false, isDefault: false),
+          ];
+    addTearDown(session.dispose);
+    session.snapshot = const TranslationSnapshot(
+      phase: TranslationPhase.completed,
+      sourceText: 'Hello',
+      translatedText: '你好',
+    );
+    final chosen = <String>[];
+    tester.view.physicalSize = const Size(720, 420);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TranslationOverlay(
+          session: session,
+          onActivate: () {},
+          onDismiss: () {},
+          onDrag: () {},
+          onMode: (_) {},
+          onService: chosen.add,
+          onSpeak: (_) {},
+          onAddVocabulary: () {},
+        ),
+      ),
+    );
+    await tester.tap(find.text('谷歌翻译'));
+    await tester.pumpAndSettle();
+    expect(find.text('Apple'), findsOneWidget);
+    await tester.tapAt(Offset.zero);
+    await tester.pumpAndSettle();
+
+    session.mode = TextMode.polish;
+    session.notifyListeners();
+    await tester.pump();
+    await tester.tap(find.text('谷歌翻译'));
+    await tester.pumpAndSettle();
+    expect(find.text('Apple'), findsNothing);
+    await tester.tap(find.text('GPT'));
+    await tester.pumpAndSettle();
+    expect(chosen, ['gpt']);
   });
 }

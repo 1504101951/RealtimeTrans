@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../common/constants/text_limits.dart';
 import '../common/constants/text_mode.dart';
+import '../settings/service_config.dart';
 import '../translation/language_direction.dart';
 import '../translation/segmented_translation.dart';
 import '../translation/translation_types.dart';
@@ -63,9 +64,27 @@ class SelectionSession extends ChangeNotifier {
   /// mode 为润色、纠错或解释；返回按已提交设置构造的模型服务，默认服务不是模型服务时返回 null。
   TranslationProvider? Function(TextMode mode) assistProviderFor = (_) => null;
 
-  /// 默认服务不是模型服务时，非翻译模式的失败说明。
+  /// serviceId 为卡片服务菜单选中的服务，mode 为处理模式；返回该服务的 Provider，
+  /// 非翻译模式下服务不是模型服务时返回 null（#100）。
+  TranslationProvider? Function(String serviceId, TextMode mode)
+  serviceProviderFor = (_, _) => null;
+
+  /// 无参数；返回卡片服务菜单的全部服务，按已提交设置生成；未接入设置时与新装配置一致，只有默认的谷歌翻译（#100）。
+  List<ServiceChoice> Function() serviceChoices = () => const [
+    (
+      id: ServiceConfig.builtinId,
+      name: ServiceConfig.builtinName,
+      isModel: false,
+      isDefault: true,
+    ),
+  ];
+
+  /// 本卡片在服务菜单中选用的服务；null 表示使用默认服务，新选区清空（#100）。
+  String? serviceOverride;
+
+  /// 当前卡片使用的服务不是模型服务时，非翻译模式的失败说明。
   static const assistUnavailable =
-      '润色、纠错与解释需要把默认翻译服务设为模型服务（OpenAI、DeepSeek 或 Anthropic）。';
+      '润色、纠错与解释需要模型服务（OpenAI、DeepSeek 或 Anthropic）；可在卡片上切换服务，或把默认翻译服务设为模型服务。';
 
   /// 无参数；返回当前是否为需要显式关闭的展开卡片。
   bool get isExpanded =>
@@ -112,6 +131,8 @@ class SelectionSession extends ChangeNotifier {
     // 新选区结束旧请求，避免后台继续消耗连接；模式回到翻译。
     _cancelTranslation();
     mode = TextMode.translate;
+    // 服务菜单的选择只属于上一张卡片。
+    serviceOverride = null;
     if (!awaitSelection && (text == null || text.trim().isEmpty)) {
       snapshot = TranslationSnapshot.idle;
       notifyListeners();
@@ -167,15 +188,26 @@ class SelectionSession extends ChangeNotifier {
   }
 
   /// mode 为目标处理模式；对卡片当前原文重新处理，翻译进行中或未展开时忽略，返回完成或取消的 Future。
-  Future<void> switchMode(TextMode mode) async {
+  Future<void> switchMode(TextMode mode) => _reprocess(mode, serviceOverride);
+
+  /// serviceId 为卡片服务菜单选中的服务；用该服务按当前模式重新处理当前原文，只影响本张卡片，
+  /// 返回处理结束的 Future（#100）。
+  Future<void> switchService(String serviceId) => _reprocess(mode, serviceId);
+
+  /// mode 为目标处理模式，serviceId 为本卡片选用的服务（null 为默认服务）；取消进行中的请求后，
+  /// 用对应 Provider 对当前原文重新处理；服务不支持该模式时显示失败说明，返回处理结束的 Future。
+  Future<void> _reprocess(TextMode mode, String? serviceId) async {
     if (!isExpanded || snapshot.phase == TranslationPhase.translating) return;
     final source = snapshot.sourceText;
-    // 语言方向沿用本卡片冻结的设置，服务按目标模式取得。
+    // 语言方向沿用本卡片冻结的设置，服务按目标模式与卡片选择取得。
     final language = activeLanguage;
     _cancelTranslation();
     this.mode = mode;
+    serviceOverride = serviceId;
     final generation = _generation;
-    final provider = mode == TextMode.translate
+    final provider = serviceId != null
+        ? serviceProviderFor(serviceId, mode)
+        : mode == TextMode.translate
         ? this.provider
         : assistProviderFor(mode);
     if (provider == null) {

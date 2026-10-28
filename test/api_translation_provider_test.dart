@@ -352,8 +352,9 @@ void main() {
     );
   });
 
-  test('润色模式使用内置提示词整段发送纯文本，忽略段落对照，原文与目标同语言也发出请求', () async {
-    // 边界：服务开启了按段落双语对照、原文与目标语言都是英文；润色仍须整段请求并接受纯文本结果。
+  test('润色模式使用设置中的处理提示词整段发送纯文本，忽略段落对照，原文与目标同语言也发出请求', () async {
+    // 边界：服务开启了按段落双语对照、原文与目标语言都是英文；润色仍须整段请求并接受纯文本结果；
+    // 系统提示词原样等于传入的处理提示词（#100）。
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(() => server.close(force: true));
     const source = 'helo world.\n\nsecond line';
@@ -361,7 +362,7 @@ void main() {
       final incoming = await server.first;
       final body = jsonDecode(await utf8.decoder.bind(incoming).join()) as Map;
       final system = body['messages'][0]['content'] as String;
-      expect(system, contains('润色'));
+      expect(system, '自定义润色提示词');
       expect(system, isNot(contains(ServiceConfig.defaultPrompt)));
       expect(body.containsKey('response_format'), isFalse);
       final input = jsonDecode(body['messages'][1]['content'] as String) as Map;
@@ -384,6 +385,7 @@ void main() {
               ),
               credentials: () async => secrets,
               mode: TextMode.polish,
+              assistPrompt: '自定义润色提示词',
             )
             .translate(
               const TranslationRequest(

@@ -5,6 +5,7 @@ import '../common/constants/channel_names.dart';
 import '../common/constants/error_codes.dart';
 import '../common/constants/screenshot_enums.dart';
 import '../common/constants/shortcut_keys.dart';
+import '../common/constants/text_mode.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import 'package:flutter/services.dart';
 import '../common/widgets/native_glass.dart';
 
 import 'app_settings.dart';
+import 'assist_prompt_editor.dart';
 import 'glossary_editor.dart';
 import 'mcp_platforms.dart';
 import 'mcp_settings_page.dart';
@@ -350,6 +352,17 @@ class _SettingsPageState extends State<_SettingsPage>
       ),
     ),
   );
+
+  /// 无参数；打开处理提示词弹窗，保存后写入草稿并自动提交，取消不改变，返回弹窗关闭的 Future（#100）。
+  Future<void> _editAssistPrompts() async {
+    final prompts = await showDialog<Map<TextMode, String>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AssistPromptEditor(prompts: _settings!.assistPrompts),
+    );
+    if (prompts == null || !mounted) return;
+    _edit(() => _settings!.assistPrompts.addAll(prompts));
+  }
 
   /// label/value 为字段名和语言码；optional 允许空值，onChanged 写回表单；返回下拉控件。
   Widget _language(
@@ -709,7 +722,7 @@ class _SettingsPageState extends State<_SettingsPage>
                         label: '默认翻译服务',
                         value: settings.defaultServiceId,
                         items: {
-                          ServiceConfig.builtinId: '谷歌翻译',
+                          ServiceConfig.builtinId: ServiceConfig.builtinName,
                           for (final service in settings.services)
                             service.id: service.displayName,
                         },
@@ -755,15 +768,30 @@ class _SettingsPageState extends State<_SettingsPage>
                             ],
                           ),
                         ),
-                      // 术语表只对模型服务的翻译生效，条目在管理弹窗中增删改（#104）。
+                      // 术语表（#104）与润色、纠错、解释的处理提示词（#100）同属模型服务设置，共用一行，不增加翻译页高度。
                       NativeGlassSettingRow(
-                        title: '术语表',
-                        child: NativeGlassSurface(
-                          material: true,
-                          child: TextButton(
-                            onPressed: _manageGlossary,
-                            child: Text('管理术语（${settings.glossary.length}）'),
-                          ),
+                        title: '术语与提示词',
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            NativeGlassSurface(
+                              material: true,
+                              child: TextButton(
+                                onPressed: _manageGlossary,
+                                child: Text(
+                                  '管理术语（${settings.glossary.length}）',
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: GlassMetrics.actionGap),
+                            NativeGlassSurface(
+                              material: true,
+                              child: TextButton(
+                                onPressed: _editAssistPrompts,
+                                child: const Text('编辑提示词…'),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                       NativeGlassSwitchTile(

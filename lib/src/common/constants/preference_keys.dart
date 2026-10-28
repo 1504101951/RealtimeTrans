@@ -1,3 +1,5 @@
+import 'text_mode.dart';
+
 /// Dart 使用的持久化偏好键协议值；与 Swift AppConstants 同名值字面量一致，改名须两端同步。
 abstract final class PreferenceKeys {
   /// 每工具独立绘图参数。
@@ -40,6 +42,13 @@ abstract final class PreferenceKeys {
   static const launchAtLogin = 'launchAtLogin';
 
   static const primaryLanguage = 'primaryLanguage';
+
+  /// 润色、纠错、解释的系统提示词；键按处理模式对应，缺省为 defaultAssistPrompts（#100）。
+  static const assistPrompts = {
+    TextMode.polish: 'polishPrompt',
+    TextMode.correct: 'correctPrompt',
+    TextMode.explain: 'explainPrompt',
+  };
 
   static const screenshotSaveDirectory = 'screenshotSaveDirectory';
 

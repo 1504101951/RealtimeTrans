@@ -20,6 +20,7 @@ class TranslationOverlay extends StatefulWidget {
     required this.onDismiss,
     required this.onDrag,
     required this.onMode,
+    required this.onService,
     required this.onSpeak,
     required this.onAddVocabulary,
   });
@@ -32,6 +33,9 @@ class TranslationOverlay extends StatefulWidget {
   final VoidCallback onDismiss;
   final VoidCallback onDrag;
   final ValueChanged<TextMode> onMode;
+
+  /// 卡片服务菜单选中的服务 id；用该服务重新处理当前原文，只影响本张卡片（#100）。
+  final ValueChanged<String> onService;
 
   /// source 为 true 时朗读原文栏，否则朗读结果栏；同一栏正在朗读时再次点击停止（#101）。
   final ValueChanged<bool> onSpeak;
@@ -122,6 +126,11 @@ class _TranslationOverlayState extends State<TranslationOverlay> {
           _ => mode == TextMode.translate ? '双语对照' : '$modeLabel结果',
         };
         final colors = Theme.of(context).colorScheme;
+        // 服务菜单：本卡片选用的服务，未选择时为默认服务（#100）。
+        final choices = widget.session.serviceChoices();
+        final currentService =
+            widget.session.serviceOverride ??
+            choices.firstWhere((choice) => choice.isDefault).id;
         final resultLabel = mode == TextMode.translate ? '译文' : modeLabel;
         // 查到词典时左侧译文与原文用 18/26 大字号，否则正文 14/22（#134）。
         final large = definition != null;
@@ -233,6 +242,23 @@ class _TranslationOverlayState extends State<TranslationOverlay> {
                               ),
                             ),
                           ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // 服务菜单在模式菜单左侧；润色、纠错、解释只列模型服务与当前服务，处理中禁用（#100）。
+                      SizedBox(
+                        width: 160,
+                        height: 28,
+                        child: NativeGlassMenuButton<String>(
+                          value: currentService,
+                          items: {
+                            for (final choice in choices)
+                              if (mode == TextMode.translate ||
+                                  choice.isModel ||
+                                  choice.id == currentService)
+                                choice.id: choice.name,
+                          },
+                          onChanged: busy ? null : widget.onService,
                         ),
                       ),
                       const SizedBox(width: 8),

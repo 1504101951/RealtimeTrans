@@ -213,3 +213,6 @@ Duration? parseRetryAfter(String? value) {
   final seconds = int.tryParse(value?.trim() ?? '');
   return seconds == null || seconds < 0 ? null : Duration(seconds: seconds);
 }
+
+/// 卡片服务菜单的一项：id、显示名称、是否模型服务、是否默认服务（#100）。
+typedef ServiceChoice = ({String id, String name, bool isModel, bool isDefault});
