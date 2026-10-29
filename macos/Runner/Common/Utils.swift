@@ -5,6 +5,30 @@ import OSLog
 import ScreenCaptureKit
 import UniformTypeIdentifiers
 
+/// App 在 Dock 与 ⌘Tab 中的显示登记（#1、#68），是激活策略的唯一写入方；只在主线程调用。
+/// 登记集合非空时为普通应用，清空后回到仅菜单栏图标；其他位置不直接调用 setActivationPolicy。
+enum DockPresence {
+    private static var holders = Set<ObjectIdentifier>()
+
+    /// holder 为登记者（窗口、窗口控制器或临时令牌，须在撤销前保持存活）；登记后切为普通应用，重复登记不变，无返回值。
+    static func enter(_ holder: AnyObject) {
+        holders.insert(ObjectIdentifier(holder))
+        apply()
+    }
+
+    /// holder 为登记者；撤销后若已无登记者则回到菜单栏应用，未登记时不变，无返回值。
+    static func leave(_ holder: AnyObject) {
+        holders.remove(ObjectIdentifier(holder))
+        apply()
+    }
+
+    /// 无参数；按登记集合写入激活策略，与当前策略相同时不写，无返回值。
+    private static func apply() {
+        let policy: NSApplication.ActivationPolicy = holders.isEmpty ? .accessory : .regular
+        if NSApp.activationPolicy() != policy { _ = NSApp.setActivationPolicy(policy) }
+    }
+}
+
 /// 录制启动的本地耗时记录；只记录固定步骤与时长，不包含图像、窗口标题或输出路径。
 enum CaptureStartupLog {
     private static let logger = Logger(subsystem: "TranslateApp", category: "CaptureStartup")
@@ -97,6 +121,19 @@ enum DisplayCapture {
     }
 
     /// content 为当前可共享内容；返回本应用，供显示器采集排除控制、译文与编辑窗口，找不到时抛错。
+    /// 无参数；返回本应用带采集控制标记、已在窗口服务器登记的窗口（含当前隐藏的），录屏只排除这些窗口（#68）；
+    /// 系统枚举缺少其中任何一个时抛错，不录制可能带控制窗口的画面。
+    @MainActor
+    static func controlWindows() async throws -> [SCWindow] {
+        let ids = Set(NSApp.windows
+            .filter { $0.identifier == AppConstants.captureControlWindowIdentifier && $0.windowNumber > 0 }
+            .map { CGWindowID($0.windowNumber) })
+        let all = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
+        let windows = all.windows.filter { ids.contains($0.windowID) }
+        guard windows.count == ids.count else { throw GIFExporter.ExportError(message: "无法排除采集控制窗口，请重新开始。") }
+        return windows
+    }
+
     static func ownApplications(in content: SCShareableContent) throws -> [SCRunningApplication] {
         let own = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
         guard !own.isEmpty else { throw GIFExporter.ExportError(message: "无法排除采集控制窗口，请重新开始。") }

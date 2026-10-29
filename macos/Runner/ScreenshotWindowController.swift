@@ -52,6 +52,8 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             let id = screen.displayID!
             guard id != selectedDisplayID else { continue }
             let panel = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            // 跨屏目标预览不进入录制画面。
+            panel.identifier = AppConstants.captureControlWindowIdentifier
             panel.isReleasedWhenClosed = false
             panel.isOpaque = false
             panel.backgroundColor = .clear
@@ -699,6 +701,8 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         let style: NSWindow.StyleMask = overlay
             ? [.borderless, .fullSizeContentView, .nonactivatingPanel] : AppConstants.captureResultWindowStyle
         let panel = ScreenshotPanel(contentRect: displayFrame, styleMask: style, backing: .buffered, defer: false)
+        // 截图面板不进入录制画面。
+        panel.identifier = AppConstants.captureControlWindowIdentifier
         panel.onEscape = { [weak self] in
             // Dart判断文字输入时取消草稿，其余状态立即关闭当前图片。
             self?.channel?.invokeMethod(AppConstants.escapePressedMethod, arguments: nil)

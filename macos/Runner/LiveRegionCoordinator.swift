@@ -62,15 +62,10 @@ final class LiveFitTextView: NSView {
 }
 
 /// 点击穿透的译文盖层。每个显示器一个透明窗口，段落块是窗口里的子视图。
-/// 窗口属于本应用，识别用的捕获流不会再次捕获它；同步录制通过窗口编号把它加入录制画面。
+/// 窗口属于本应用，识别用的捕获流不会再次捕获它；同步录制只排除采集控制窗口，盖层自然进入录制画面。
 @MainActor
 final class LiveTextOverlay {
     private var panels: [(screen: NSRect, panel: NSPanel)] = []
-
-    /// 无参数。返回当前盖层窗口的系统窗口编号，供录制把这些窗口加入画面。
-    var windowIDs: Set<CGWindowID> {
-        Set(panels.map { CGWindowID($0.panel.windowNumber) })
-    }
 
     /// 无参数。在每个显示器上铺一个空的透明窗口并显示；会话开始时调用。
     func open() {
@@ -225,8 +220,7 @@ final class LiveRegionCoordinator {
             try await command(.start, generation: token)
             try await capture.start(source: source, region: region, generation: token)
             if recording {
-                // 录制与识别各用一路捕获；录制把译文盖层窗口加入画面，控制条和遮罩仍被排除。
-                controls.service.includedWindowIDs = overlay.windowIDs
+                // 录制与识别各用一路捕获；录制只排除采集控制窗口，译文盖层自然进入画面。
                 if let region { try controls.service.select(region) }
                 // 实时翻译的同步录制随翻译立即开始，不延时（#129）。
                 try await controls.service.startRecording(source, delay: 0)
@@ -338,7 +332,6 @@ final class LiveRegionCoordinator {
     private func stopRecording() async {
         guard recording else { return }
         recording = false
-        controls.service.includedWindowIDs = []
         do {
             try await controls.service.stop()
         } catch {
@@ -350,7 +343,6 @@ final class LiveRegionCoordinator {
     private func cancelRecording() async {
         guard recording else { return }
         recording = false
-        controls.service.includedWindowIDs = []
         await controls.service.cancel()
     }
 

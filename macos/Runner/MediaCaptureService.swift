@@ -56,8 +56,6 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
     var onActiveChanged: ((Bool) -> Void)?
     /// 长截图实时缩略图与所在屏倍率；确认帧或回退目标变化时在主线程通知。
     var onScrollPreview: ((ScrollStitcher.Preview, CGFloat) -> Void)?
-    /// 本应用中需要进入录制画面的窗口编号；为空时本应用窗口全部排除。
-    var includedWindowIDs: Set<CGWindowID> = []
 
     /// 无参数；返回仍占有采集/编码资源的状态，供菜单和窗口关闭判断。
     var isBusy: Bool { [.preparing, .recording, .pausing, .paused, .finalizing, .scrolling, .converting].contains(phase) }
@@ -157,14 +155,14 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
                 throw GIFExporter.ExportError(message: "捕获目标已不可用，请重新选择。")
             }
             let display = try DisplayCapture.display(displayID, in: content)
-            // 应用的控制、翻译、编辑窗口全部从显示器捕获中排除。
-            let own = try DisplayCapture.ownApplications(in: content)
-            // 指定的本应用窗口作为例外留在画面里；找不全时明确失败，不录制缺少这些窗口的画面。
-            let included = content.windows.filter { includedWindowIDs.contains($0.windowID) }
-            guard included.count == includedWindowIDs.count else {
-                throw GIFExporter.ExportError(message: "无法把译文盖层加入录制，请重新开始。")
+            if video {
+                // 录屏只排除采集控制窗口；翻译卡片、实时翻译盖层等本应用其余窗口与录制中新出现的窗口都进入画面（#68）。
+                filter = SCContentFilter(display: display, excludingWindows: try await DisplayCapture.controlWindows())
+            } else {
+                // 长截图排除本应用全部窗口，翻译窗口不能打乱拼接。
+                let own = try DisplayCapture.ownApplications(in: content)
+                filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
             }
-            filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: included)
             targetFrame = display.frame
             if kind == CaptureTarget.region.rawValue, let region {
                 crop = try DisplayCapture.crop(region, in: filter)
@@ -327,7 +325,7 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
         let segmentID = UUID()
         applicationSegmentID = segmentID
         let recorder = try await ApplicationRecorder(content: content, applicationID: applicationID,
-            expected: applicationCanvas, url: url, includedWindowIDs: includedWindowIDs) { [weak self] error in
+            expected: applicationCanvas, url: url) { [weak self] error in
             guard let self, self.id == token, self.applicationSegmentID == segmentID, self.phase == .recording else { return }
             // 系统中断保留本段已编码画面及以前完成的分段，错误随结果交付。
             Task { @MainActor in

@@ -34,34 +34,22 @@ enum ScreenCaptureService {
     @MainActor
     static func requestAccess(promoteToRegularApp: Bool = false) async -> Bool {
         if isAuthorized() { return true }
-        let previousPolicy = NSApp.activationPolicy()
-        if promoteToRegularApp, previousPolicy != .regular {
-            _ = NSApp.setActivationPolicy(.regular)
-        }
+        // 申请期间临时登记为普通应用，系统授权框才能显示在前台；结束时撤销。
+        let presence = NSObject()
         if promoteToRegularApp {
+            DockPresence.enter(presence)
             NSApp.activate(ignoringOtherApps: true)
         }
+        defer { DockPresence.leave(presence) }
         // 只在尚未授权时申请；已授权不得再次 CGRequest。
         _ = CGRequestScreenCaptureAccess()
         // 只打开设置页不会把本进程写入列表；ScreenCaptureKit 枚举才会登记 TranslateApp。
         _ = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         for _ in 0..<20 {
-            if isAuthorized() {
-                restoreActivationPolicy(previousPolicy)
-                return true
-            }
+            if isAuthorized() { return true }
             try? await Task.sleep(for: .milliseconds(200))
         }
-        restoreActivationPolicy(previousPolicy)
         return isAuthorized()
-    }
-
-    /// previous 为申请前的激活策略；申请结束后恢复菜单栏形态。
-    @MainActor
-    private static func restoreActivationPolicy(_ previous: NSApplication.ActivationPolicy) {
-        if NSApp.activationPolicy() != previous {
-            _ = NSApp.setActivationPolicy(previous)
-        }
     }
 
     /// 无参数；打开系统「屏幕录制」设置页，不修改 TCC 数据库。

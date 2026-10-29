@@ -234,9 +234,8 @@ final class ApplicationRecorder: NSObject, SCStreamDelegate {
     private let onFailure: @MainActor (Error) -> Void
 
     /// content为当前授权来源，applicationID为用户选择的Bundle ID，expected为暂停前拓扑，url为本段文件；
-    /// includedWindowIDs为本应用中需要进入画面的窗口编号，为空时画面只含所选应用。
+    /// 画面包含所选应用与本应用，只排除采集控制窗口（#68）。
     init(content: SCShareableContent, applicationID: String, expected: ApplicationCaptureCanvas?, url: URL,
-         includedWindowIDs: Set<CGWindowID> = [],
          onFailure: @escaping @MainActor (Error) -> Void) async throws {
         let apps = content.applications.filter { $0.bundleIdentifier == applicationID }
         guard applicationID != Bundle.main.bundleIdentifier, !apps.isEmpty,
@@ -245,19 +244,10 @@ final class ApplicationRecorder: NSObject, SCStreamDelegate {
         }
         self.applicationID = applicationID
         self.onFailure = onFailure
-        var included = apps
-        var excepted: [SCWindow] = []
-        if !includedWindowIDs.isEmpty {
-            // 把本应用加入画面，再排除它除指定窗口以外的全部窗口（含当前未显示的），控制条和遮罩不进入录制。
-            let all = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
-            let pid = ProcessInfo.processInfo.processIdentifier
-            let own = all.windows.filter { $0.owningApplication?.processID == pid }
-            guard own.filter({ includedWindowIDs.contains($0.windowID) }).count == includedWindowIDs.count else {
-                throw GIFExporter.ExportError(message: "无法把译文盖层加入录制，请重新开始。")
-            }
-            included += all.applications.filter { $0.processID == pid }
-            excepted = own.filter { !includedWindowIDs.contains($0.windowID) }
-        }
+        // 本应用与所选应用一起进入画面（翻译卡片、实时翻译盖层等），只排除采集控制窗口。
+        let own = try DisplayCapture.ownApplications(in: content)
+        let included = apps + own
+        let excepted = try await DisplayCapture.controlWindows()
         let filters = content.displays.map { display in
             (display, SCContentFilter(display: display, including: included, exceptingWindows: excepted))
         }

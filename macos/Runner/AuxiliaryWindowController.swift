@@ -84,6 +84,8 @@ final class AuxiliaryWindowController: NSObject, NSWindowDelegate {
 
     /// notification 为窗口关闭事件；解除当前引擎回调并停止引擎，返回void。
     func windowWillClose(_ notification: Notification) {
+        // 窗口关闭即从 Dock 与 ⌘Tab 撤销登记。
+        if let window { DockPresence.leave(window) }
         pendingStartup?.cancel()
         pendingStartup = nil
         channel?.setMethodCallHandler(nil)

@@ -73,6 +73,8 @@ enum AppConstants {
     static let webMEncoderScheme = "translateapp-webm"
     /// 录制结果使用系统窗口控制；标题栏尺寸由AppKit按此样式实际计算。
     static let captureResultWindowStyle: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
+    /// 采集控制窗口标记：控制气泡、选区外阴影、长截图预览、截图面板与跨屏目标预览；录屏只排除带此标记的本应用窗口（#68）。
+    static let captureControlWindowIdentifier = NSUserInterfaceItemIdentifier("captureControl")
     static let getCaptureStateMethod = "getCaptureState"
     static let captureStateChangedMethod = "captureStateChanged"
     static let prepareCaptureMethod = "prepareCapture"

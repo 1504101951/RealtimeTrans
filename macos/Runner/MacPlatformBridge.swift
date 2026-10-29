@@ -16,17 +16,12 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
     private let overlay: OverlayPanelController
     private let selectionMonitor: SelectionMonitor
     let screenshot = ScreenshotWindowController()
-    private var screenshotActive = false
-    private var mediaActive = false
     /// 一个采集控制器持有当前媒体会话，菜单与独立窗口共享资源状态。
     @MainActor lazy var live: LiveRegionCoordinator = LiveRegionCoordinator(bridge: self, controls: self.capture)
     @MainActor lazy var capture: CaptureWindowController = {
         let controller = CaptureWindowController(screenshot: screenshot)
-        controller.onActiveChanged = { [weak self] active in
-            guard let self else { return }
-            self.mediaActive = active
-            // 合并截图与连续采集占用，避免一个结束时提前恢复选区监听。
-            self.updateCaptureActivity()
+        // 录屏与长截图期间选区翻译照常工作（#1），只同步菜单栏的采集状态。
+        controller.onActiveChanged = { active in
             StatusBarController.shared.setCaptureActive(active)
         }
         return controller
@@ -96,17 +91,10 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
         }
         screenshot.onCapturingChanged = { [weak self] active in
             guard let self else { return }
-            self.screenshotActive = active
-            // 汇总两个采集入口；设置菜单仍可操作，自动翻译暂时挂起。
-            self.updateCaptureActivity()
+            // 截图取帧期间挂起选区监听并隐藏翻译浮层，浮层不进入冻结帧；设置菜单仍可操作。
+            self.selectionMonitor.isCapturingScreenshot = active
+            self.overlay.setCaptureHidden(active)
         }
-    }
-
-    /// 无参数；同步正在采集的资源占用到翻译监听与浮层可见性，无返回值。
-    private func updateCaptureActivity() {
-        let active = screenshotActive || mediaActive
-        selectionMonitor.isCapturingScreenshot = active
-        overlay.setCaptureHidden(active)
     }
 
     /// messenger 为主引擎通道，overlay 为浮层，selectionMonitor 为输入监听；返回已注册的平台桥。

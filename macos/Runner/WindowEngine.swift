@@ -131,8 +131,9 @@ enum WindowEngine {
         return window
     }
 
-    /// window 为附属窗口；激活应用并前置该窗口，无返回值。
+    /// window 为附属窗口；登记到 Dock 与 ⌘Tab（窗口关闭时由所属控制器撤销），激活应用并前置该窗口，无返回值。
     static func present(_ window: NSWindow) {
+        DockPresence.enter(window)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
     }

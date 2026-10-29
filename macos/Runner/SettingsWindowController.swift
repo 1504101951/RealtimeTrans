@@ -109,6 +109,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// notification 为设置窗口失焦通知；中止录制并保留原有组合，无返回值。
     func windowDidResignKey(_ notification: Notification) { finishRecording(nil) }
 
+    /// notification 为设置窗口关闭通知；窗口与引擎保留以便快速重开，只撤销 Dock 与 ⌘Tab 登记，无返回值。
+    func windowWillClose(_ notification: Notification) {
+        DockPresence.leave(notification.object as! NSWindow)
+    }
+
     /// 无参数；菜单改动或再次打开窗口时刷新主引擎快照，无返回值。
     func refresh() {
         channel?.invokeMethod(AppConstants.refreshSettingsMethod, arguments: nil)

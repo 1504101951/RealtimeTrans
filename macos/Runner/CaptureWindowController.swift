@@ -20,8 +20,6 @@ final class CaptureWindowController: NSObject, NSWindowDelegate {
     private var discarding = false
     private var compactPresentation: Bool?
     private var lastPhase = CapturePhase.idle
-    /// 打开结果前的激活策略；关闭结果后恢复菜单栏形态，避免采集层消失后窗口留在其他应用后面。
-    private var activationBeforeResult: NSApplication.ActivationPolicy?
     private var originScreen: NSScreen?
     private var captureShades: [CGDirectDisplayID: NSWindow] = [:]
     var onActiveChanged: ((Bool) -> Void)?
@@ -100,7 +98,8 @@ final class CaptureWindowController: NSObject, NSWindowDelegate {
         await service.cancel()
         window?.delegate = nil
         window?.close()
-        restoreActivationIfNeeded()
+        // 结果窗口随采集界面关闭，撤销 Dock 与 ⌘Tab 登记。
+        DockPresence.leave(self)
         channel?.setMethodCallHandler(nil)
         engine?.shutDownEngine()
         engine = nil
@@ -229,6 +228,8 @@ final class CaptureWindowController: NSObject, NSWindowDelegate {
                 styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView], backing: .buffered, defer: false)
             // 平台包装视图可能不接受首鼠标；无需键盘的按钮不先消耗一次点击来取得窗口焦点。
             panel.becomesKeyOnlyIfNeeded = true
+            // 控制气泡不进入录制画面。
+            panel.identifier = AppConstants.captureControlWindowIdentifier
             window = panel
         } else {
             window = NSWindow(contentRect: frame, styleMask: AppConstants.captureResultWindowStyle,
@@ -341,14 +342,15 @@ final class CaptureWindowController: NSObject, NSWindowDelegate {
             compactPresentation = nil
             releasePlayer()
             if previous != service.phase, service.phase == .failed, let message = service.snapshot()["error"] as? String {
-                // 采集层已经撤下；先成为可激活应用，失败说明才不会留在正在滚动的应用后面。
-                let policy = NSApp.activationPolicy()
-                if policy != .regular { _ = NSApp.setActivationPolicy(.regular) }
+                // 采集层已经撤下；提示期间临时登记为普通应用，失败说明才不会留在正在滚动的应用后面。
+                let alert = NSObject()
+                DockPresence.enter(alert)
                 NSApp.activate(ignoringOtherApps: true)
                 showError(GIFExporter.ExportError(message: message))
-                if NSApp.activationPolicy() != policy { _ = NSApp.setActivationPolicy(policy) }
+                DockPresence.leave(alert)
             }
-            restoreActivationIfNeeded()
+            // 结果已关闭或未打开，撤销本控制器的 Dock 与 ⌘Tab 登记。
+            DockPresence.leave(self)
             return
         }
         createPanel()
@@ -406,22 +408,14 @@ final class CaptureWindowController: NSObject, NSWindowDelegate {
         if showingResult { updateCaptureShades() }
     }
 
-    /// window为本次要展示的结果；记住打开前的激活策略，并把它放到当前前台应用之前。
+    /// window为本次要展示的结果；以本控制器登记到 Dock 与 ⌘Tab，并把它放到当前前台应用之前。
     private func orderResultFront(_ window: NSWindow) {
-        if activationBeforeResult == nil { activationBeforeResult = NSApp.activationPolicy() }
         // 菜单栏应用停留在 accessory 时，普通窗口会落在正在滚动的应用后面。
-        if NSApp.activationPolicy() != .regular { _ = NSApp.setActivationPolicy(.regular) }
+        DockPresence.enter(self)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         // 激活尚未完成时也先显示；层级仍是普通窗口，之后允许其他应用盖住。
         window.orderFrontRegardless()
-    }
-
-    /// 无参数/返回值；结果关闭后恢复打开前的菜单栏或普通激活策略。
-    private func restoreActivationIfNeeded() {
-        guard let previous = activationBeforeResult else { return }
-        activationBeforeResult = nil
-        if NSApp.activationPolicy() != previous { _ = NSApp.setActivationPolicy(previous) }
     }
 
     /// window为已经换成普通标题样式的结果窗；长图和视频使用不同标题与最小内容，避免工具栏被裁掉。
@@ -478,6 +472,8 @@ final class CaptureWindowController: NSObject, NSWindowDelegate {
         let panel: NSPanel
         if let current = scrollPreviewWindow { panel = current } else {
             panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            // 长截图预览不进入录制画面。
+            panel.identifier = AppConstants.captureControlWindowIdentifier
             panel.isReleasedWhenClosed = false
             panel.isOpaque = false
             panel.backgroundColor = .clear
@@ -526,6 +522,8 @@ final class CaptureWindowController: NSObject, NSWindowDelegate {
                 shade = current
             } else {
                 shade = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+                // 选区外阴影不进入录制画面。
+                shade.identifier = AppConstants.captureControlWindowIdentifier
                 shade.isReleasedWhenClosed = false
                 shade.isOpaque = false
                 shade.backgroundColor = .clear

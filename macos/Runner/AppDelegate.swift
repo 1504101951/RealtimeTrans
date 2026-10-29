@@ -53,7 +53,7 @@ class AppDelegate: FlutterAppDelegate {
             selectionMonitor: selectionMonitor
         )
 
-        NSApp.setActivationPolicy(.accessory)
+        // Info.plist 的 LSUIElement 使 App 以菜单栏应用启动；之后的激活策略只由 DockPresence 写入。
         hideMainWindowOnly()
         StatusBarController.shared.showSettings = { [weak self] in self?.settingsWindow.show() }
         StatusBarController.shared.refreshSettings = { [weak self] in self?.settingsWindow.refresh() }
