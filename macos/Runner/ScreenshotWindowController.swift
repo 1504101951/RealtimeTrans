@@ -1054,16 +1054,25 @@ enum EmojiPaletteDiagnostics {
     }
 
     /// panelLevel 为截图面板窗口层级；后台每 50ms 枚举屏上窗口，3 秒内记录最多 3 个新出现的其他进程窗口，
-    /// 写入耗时、进程名、层级与屏幕矩形；一个都没有时写 none，无返回值。
+    /// 写入耗时、进程名、层级与屏幕矩形，并记录其中已出现的窗口在何时消失（gone）；一个都没有时写 none，无返回值。
     static func watch(panelLevel: Int) {
         let own = getpid()
         let start = ContinuousClock.now
         let before = Set(onScreenWindows().compactMap { $0[kCGWindowNumber as String] as? Int })
         DispatchQueue.global(qos: .utility).async {
             var seen = Set<Int>()
+            var gone = Set<Int>()
             for _ in 0..<60 {
                 Thread.sleep(forTimeInterval: 0.05)
-                for info in onScreenWindows() {
+                let current = onScreenWindows()
+                let numbers = Set(current.compactMap { $0[kCGWindowNumber as String] as? Int })
+                for number in seen.subtracting(gone).subtracting(numbers) {
+                    gone.insert(number)
+                    let duration = start.duration(to: .now).components
+                    let ms = Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1_000_000_000_000_000
+                    logger.notice("gone window=\(number, privacy: .public) ms=\(ms, privacy: .public) active=\(DispatchQueue.main.sync { NSApp.isActive }, privacy: .public)")
+                }
+                for info in current {
                     let number = info[kCGWindowNumber as String] as? Int ?? 0
                     guard (info[kCGWindowOwnerPID as String] as? pid_t) != own, !before.contains(number),
                           !seen.contains(number), seen.count < 3 else { continue }
@@ -1074,7 +1083,7 @@ enum EmojiPaletteDiagnostics {
                     let duration = start.duration(to: .now).components
                     let ms = Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1_000_000_000_000_000
                     logger.notice("""
-                        window owner=\(owner, privacy: .public) layer=\(layer, privacy: .public) \
+                        window=\(number, privacy: .public) owner=\(owner, privacy: .public) layer=\(layer, privacy: .public) \
                         panelLevel=\(panelLevel, privacy: .public) ms=\(ms, privacy: .public) \
                         bounds=\(bounds.description, privacy: .public)
                         """)
