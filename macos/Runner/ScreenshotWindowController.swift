@@ -420,6 +420,10 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             // 截图引擎的阶段耗时写入同一性能日志（#68）。
             PerformanceLog.note(args["stage"] as! String, milliseconds: (args["ms"] as! NSNumber).doubleValue)
             result(nil)
+        case AppConstants.showCharacterPaletteMethod:
+            // 表情经 NSTextInputClient 写入当前获得焦点的 Flutter 输入框（#103）。
+            NSApp.orderFrontCharacterPalette(nil)
+            result(nil)
         case AppConstants.openStickerSettingsMethod:
             // 「管理贴纸…」打开设置窗口（#103）。
             MainActor.assumeIsolated { StatusBarController.shared.showSettings?() }

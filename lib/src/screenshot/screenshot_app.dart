@@ -1800,9 +1800,10 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     return null;
   }
 
-  /// 无参数；打开贴纸面板：选中我的贴纸则放到截图上，「管理贴纸…」打开设置窗口，返回弹窗关闭的 Future（#103）。
+  /// 无参数；打开贴纸面板：选中我的贴纸或输入表情则放到截图上，「管理贴纸…」打开设置窗口，返回弹窗关闭的 Future（#103）。
   Future<void> _openStickerPanel() async {
     final captureId = _capture['id'];
+    var emojiInput = false;
     _dialogOpen = true;
     final choice = await showDialog<StickerChoice>(
       context: _editorKey.currentContext!,
@@ -1810,14 +1811,34 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
         child: StickerPanel(
           stickers: _stickers,
           directory: _stickerDirectory!,
+          // Emoji 输入框获得焦点后：按键交给输入框，再打开系统「表情与符号」面板。
+          onEmojiInput: () {
+            emojiInput = true;
+            _setTextInput(true);
+            unawaited(
+              widget.channel.invokeMethod<void>(
+                MethodNames.showCharacterPalette,
+              ),
+            );
+          },
         ),
       ),
     );
     _dialogOpen = false;
     if (!mounted || captureId != _capture['id']) return;
+    // 输入过表情时，面板关闭后恢复截图快捷键路由。
+    if (emojiInput) _setTextInput(false);
     switch (choice) {
       case PickedSticker(:final entry):
-        await _placeSticker(entry);
+        await _placeSticker(
+          Size(entry.width, entry.height),
+          stickerId: entry.id,
+        );
+      case PickedEmoji(:final emoji):
+        await _placeSticker(
+          const Size.square(StickerMetrics.emojiDefaultSize),
+          text: emoji,
+        );
       case ManageStickers():
         unawaited(
           widget.channel.invokeMethod<void>(MethodNames.openStickerSettings),
@@ -1827,11 +1848,15 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     }
   }
 
-  /// entry 为选中的贴纸；按需加载其位图，以默认大小放在选区中央（超出选区时等比缩小），
-  /// 并切到光标工具选中它，返回放置完成的 Future（#103）。
-  Future<void> _placeSticker(StickerEntry entry) async {
-    final id = entry.id;
-    if (!_document.stickerImages.containsKey(id)) {
+  /// size 为贴纸默认大小（pt）；stickerId 为我的贴纸 id（按需加载位图），Emoji 贴纸为 null 且 text 为表情字符。
+  /// 以默认大小放在选区中央（超出选区时等比缩小），并切到光标工具选中它，返回放置完成的 Future（#103）。
+  Future<void> _placeSticker(
+    Size size, {
+    String? stickerId,
+    String text = '',
+  }) async {
+    final id = stickerId;
+    if (id != null && !_document.stickerImages.containsKey(id)) {
       final bytes = await File('$_stickerDirectory/$id.png').readAsBytes();
       final codec = await ui.instantiateImageCodec(bytes);
       final frame = await codec.getNextFrame();
@@ -1841,8 +1866,8 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     if (!mounted) return;
     final crop = _document.cropRect;
     // 默认大小为屏幕点，按像素倍率换算到源图像素。
-    final width = entry.width * _pixelRatio;
-    final height = entry.height * _pixelRatio;
+    final width = size.width * _pixelRatio;
+    final height = size.height * _pixelRatio;
     final fit = math.min(
       1.0,
       math.min(crop.width / width, crop.height / height),
@@ -1857,6 +1882,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           height: height * fit,
         ),
         stickerId: id,
+        text: text,
       ),
     );
     setState(() {

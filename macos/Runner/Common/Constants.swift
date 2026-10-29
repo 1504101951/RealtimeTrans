@@ -175,6 +175,8 @@ enum AppConstants {
     static let stickerDirectoryMethod = "stickerDirectory"
     /// 截图贴纸面板打开设置、Delete 键删除选中标注的协议值（#103），与Dart常量同步。
     static let openStickerSettingsMethod = "openStickerSettings"
+    /// 贴纸面板「Emoji…」打开系统「表情与符号」面板的协议值（#103），与Dart常量同步。
+    static let showCharacterPaletteMethod = "showCharacterPalette"
     static let deleteScreenshotSelectionMethod = "deleteScreenshotSelection"
     /// Delete（kVK_Delete）与向前删除（kVK_ForwardDelete）的硬件键码（#103）。
     static let deleteKeyCodes: Set<UInt16> = [51, 117]

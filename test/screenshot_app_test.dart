@@ -925,6 +925,76 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
   });
 
+  testWidgets('贴纸面板「Emoji…」：输入框收到的第一个表情成为贴纸并关闭面板（#103）', (
+    tester,
+  ) async {
+    // 边界：64×64 蓝图、无我的贴纸；输入两个字符只取第一个字素簇，面板关闭；
+    // 测试字体没有表情字形，用测试字体可绘制的「A」代替表情（字形为实心方块）；
+    // 默认 96pt 超出 64 像素选区，等比缩小到整图后中心像素不再是蓝色。
+    tester.view.physicalSize = const Size(900, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final bytes = await tester.runAsync(() => _solidPng(64, 64, _blue));
+    const channel = MethodChannel('test/screenshot-emoji');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    Uint8List? copied;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case MethodNames.getScreenshot:
+          return {
+            'id': 'shot-emoji',
+            'bytes': bytes,
+            'capturedAt': 0,
+            'width': 64,
+            'height': 64,
+            PreferenceKeys.stickers: const <Object?>[],
+            PreferenceKeys.stickerDirectory: '/unused',
+          };
+        case MethodNames.copyScreenshot:
+          copied = (call.arguments as Map)['bytes'] as Uint8List;
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.ensureVisible(find.byKey(const Key('screenshot-beautify')));
+    await tester.tap(find.byKey(const Key('screenshot-beautify')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key(ScreenshotActions.sticker)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('sticker-emoji')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('sticker-emoji-input')),
+      'Ax',
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sticker-emoji-input')), findsNothing);
+
+    await tester.ensureVisible(find.byKey(const Key('screenshot-copy')));
+    final center = (await tester.runAsync(() async {
+      await tester.tap(find.byKey(const Key('screenshot-copy')));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      final codec = await ui.instantiateImageCodec(copied!);
+      final image = (await codec.getNextFrame()).image;
+      final data = (await image.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      ))!;
+      final offset = (32 * image.width + 32) * 4;
+      return (
+        data.getUint8(offset),
+        data.getUint8(offset + 1),
+        data.getUint8(offset + 2),
+      );
+    }))!;
+    expect(center, isNot((0, 0, 255)));
+    await tester.pump(const Duration(seconds: 2));
+  });
+
   testWidgets('美化行：未开启美化时下拉禁用，应用背景后可用，「无背景」关闭美化（#103）', (tester) async {
     // 边界：初始两个下拉 onChanged 为空；应用默认渐变后内边距下拉可用；再次打开背景选「无背景」后恢复禁用。
     tester.view.physicalSize = const Size(900, 900);
