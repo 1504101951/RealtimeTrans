@@ -959,9 +959,9 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
   });
 
-  testWidgets('贴纸面板「Emoji…」：输入框收到的第一个表情成为贴纸并关闭面板（#103）', (tester) async {
-    // 边界：64×64 蓝图、无我的贴纸；输入两个字符只取第一个字素簇，面板关闭；
-    // 测试字体没有表情字形，用测试字体可绘制的「A」代替表情（字形为实心方块）；
+  testWidgets('贴纸面板「Emoji…」：关闭面板，原生送来的表情放置为贴纸（#103）', (tester) async {
+    // 边界：64×64 蓝图、无我的贴纸；点「Emoji…」后贴纸面板关闭、不出现输入框；
+    // 原生 emojiPicked 送来当前捕获的表情后放置贴纸。测试字体没有表情字形，用可绘制的「A」代替（字形为实心方块）；
     // 默认 96pt 超出 64 像素选区，等比缩小到整图后中心像素不再是蓝色。
     tester.view.physicalSize = const Size(900, 900);
     tester.view.devicePixelRatio = 1;
@@ -1003,12 +1003,20 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('sticker-emoji')));
     await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const ValueKey('sticker-emoji-input')),
-      'Ax',
+    expect(find.text('我的贴纸'), findsNothing);
+    expect(find.byType(TextField), findsNothing);
+    // 模拟原生表情接收器收到表情后的回调。
+    await messenger.handlePlatformMessage(
+      channel.name,
+      const StandardMethodCodec().encodeMethodCall(
+        const MethodCall(MethodNames.emojiPicked, {
+          'id': 'shot-emoji',
+          'emoji': 'A',
+        }),
+      ),
+      (_) {},
     );
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('sticker-emoji-input')), findsNothing);
+    await tester.pump();
 
     await tester.ensureVisible(find.byKey(const Key('screenshot-copy')));
     final center = (await tester.runAsync(() async {

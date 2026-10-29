@@ -293,6 +293,14 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           return;
         }
         _toolbarActions()[args['action']]?.call();
+      } else if (call.method == MethodNames.emojiPicked) {
+        final args = call.arguments as Map;
+        // 原生表情接收器收到的表情；只放到当前捕获上，每个表情一张 Emoji 贴纸（#103）。
+        if (_capture['id'] == null || _capture['id'] != args['id']) return;
+        await _placeSticker(
+          const Size.square(StickerMetrics.emojiDefaultSize),
+          text: args['emoji'] as String,
+        );
       } else if (call.method == MethodNames.deleteScreenshotSelection) {
         // 非激活截图面板的 Delete 由原生转发；只作用于当前捕获，文字输入时留给输入框（#103）。
         final id = (call.arguments as Map)['id'];
@@ -1799,10 +1807,10 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     return null;
   }
 
-  /// 无参数；打开贴纸面板：选中我的贴纸或输入表情则放到截图上，「管理贴纸…」打开设置窗口，返回弹窗关闭的 Future（#103）。
+  /// 无参数；打开贴纸面板：选中我的贴纸则放到截图上，「Emoji…」请原生打开系统表情面板（表情经 emojiPicked 回来），
+  /// 「管理贴纸…」打开设置窗口，返回弹窗关闭的 Future（#103）。
   Future<void> _openStickerPanel() async {
     final captureId = _capture['id'];
-    var emojiInput = false;
     _dialogOpen = true;
     final choice = await showDialog<StickerChoice>(
       context: _editorKey.currentContext!,
@@ -1810,33 +1818,21 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
         child: StickerPanel(
           stickers: _stickers,
           directory: _stickerDirectory!,
-          // Emoji 输入框获得焦点后：按键交给输入框，再打开系统「表情与符号」面板。
-          onEmojiInput: () {
-            emojiInput = true;
-            _setTextInput(true);
-            unawaited(
-              widget.channel.invokeMethod<void>(
-                MethodNames.showCharacterPalette,
-              ),
-            );
-          },
         ),
       ),
     );
     _dialogOpen = false;
     if (!mounted || captureId != _capture['id']) return;
-    // 输入过表情时，面板关闭后恢复截图快捷键路由。
-    if (emojiInput) _setTextInput(false);
     switch (choice) {
       case PickedSticker(:final entry):
         await _placeSticker(
           Size(entry.width, entry.height),
           stickerId: entry.id,
         );
-      case PickedEmoji(:final emoji):
-        await _placeSticker(
-          const Size.square(StickerMetrics.emojiDefaultSize),
-          text: emoji,
+      case RequestEmoji():
+        // 原生把隐形接收器设为焦点后打开系统「表情与符号」面板，面板开着时每选一个表情回调一次。
+        unawaited(
+          widget.channel.invokeMethod<void>(MethodNames.showCharacterPalette),
         );
       case ManageStickers():
         unawaited(

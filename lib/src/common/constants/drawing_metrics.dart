@@ -135,10 +135,8 @@ abstract final class StickerMetrics {
   static const thumbnail = 48.0;
   static const thumbnailGap = 8.0;
 
-  /// 贴纸面板操作按钮间距；Emoji 输入框高度及其与操作行的间距。
+  /// 贴纸面板操作按钮间距。
   static const actionGap = 8.0;
-  static const emojiInputHeight = 32.0;
-  static const emojiInputGap = 8.0;
 
   /// 上传框预览区尺寸与棋盘格边长。
   static const previewWidth = 480.0;
