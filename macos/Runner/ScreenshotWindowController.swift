@@ -28,6 +28,8 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
     private var captureTask: Task<Void, Never>?
     /// 发起冻结截图前的前台应用身份；编辑器获得焦点不改变应用来源排序。
     private var sourceApplicationID: String?
+    /// 为打开系统表情面板临时激活了本应用；截图会话结束时据此把前台交还来源应用（#68）。
+    private var activatedForPalette = false
     private var captureSources: [[String: Any]] = []
     private var targetPreviews: [NSWindow] = []
     private var previewSource: (kind: String, applicationID: String?)?
@@ -226,6 +228,13 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         // removeScreenshotKeys 解除草稿关闭后的按键拦截。
         removeScreenshotKeys()
         textInputActive = false
+        if activatedForPalette {
+            activatedForPalette = false
+            // 为表情面板激活过本应用时，把前台交还截图前的应用。
+            if let id = sourceApplicationID {
+                NSRunningApplication.runningApplications(withBundleIdentifier: id).first?.activate()
+            }
+        }
         image = nil
         captureId = nil
         message = nil
@@ -430,8 +439,23 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             result(nil)
         case AppConstants.showCharacterPaletteMethod:
             // 表情经 NSTextInputClient 写入当前获得焦点的 Flutter 输入框（#103）。
-            NSApp.orderFrontCharacterPalette(nil)
             result(nil)
+            if NSApp.isActive {
+                NSApp.orderFrontCharacterPalette(nil)
+                return
+            }
+            // 非激活截图面板中系统表情面板响应慢：先临时激活本应用，激活完成后再打开（#68）。
+            // 适用条件为本应用不在前台；若激活后仍慢需重新评估。
+            activatedForPalette = true
+            var observer: NSObjectProtocol?
+            observer = NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                NotificationCenter.default.removeObserver(observer!)
+                self?.window?.makeKey()
+                NSApp.orderFrontCharacterPalette(nil)
+            }
+            NSApp.activate()
         case AppConstants.openStickerSettingsMethod:
             // 「管理贴纸…」打开设置窗口（#103）。
             MainActor.assumeIsolated { StatusBarController.shared.showSettings?() }

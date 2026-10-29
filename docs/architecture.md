@@ -112,7 +112,7 @@ AX 读取优先使用文本标记范围获取跨节点选区，再读取普通�
 
 ## 区域截图
 
-Swift 的系统截图模块用本进程 ScreenCaptureKit 申请屏幕录制并取得显示器冻结帧；未授权不进入编辑。冻结帧是 BGRA（sRGB、8 位）`CGImage`，原生冻结视图直接显示；截图快照以 `pixels`（原始字节）与 `rowBytes`、`width`、`height` 交给截图引擎，全程不编解码 PNG。Dart 的 `ScreenshotApp` 用 `ui.decodeImageFromPixels` 建一次源图交给 `EditDocument`，编辑画面、马赛克与取色预览、导出合成共用；它在冻结帧上框选（选区外变暗、选区内清晰），负责标注、自动文件名和导出。识别文字与二维码使用 Dart 合成后交来的 PNG。截图结果用独立 captureId 拒绝过期操作，不属于选区会话。主界面就绪后 `ScreenshotWindowController.prewarm` 预热截图引擎与隐藏面板，首次截图直接复用。
+截图贴纸面板的「Emoji…」在本应用不在前台时先临时激活再打开系统表情面板，截图会话结束时激活截图前的来源应用。Swift 的系统截图模块用本进程 ScreenCaptureKit 申请屏幕录制并取得显示器冻结帧；未授权不进入编辑。冻结帧是 BGRA（sRGB、8 位）`CGImage`，原生冻结视图直接显示；截图快照以 `pixels`（原始字节）与 `rowBytes`、`width`、`height` 交给截图引擎，全程不编解码 PNG。Dart 的 `ScreenshotApp` 用 `ui.decodeImageFromPixels` 建一次源图交给 `EditDocument`，编辑画面、马赛克与取色预览、导出合成共用；它在冻结帧上框选（选区外变暗、选区内清晰），负责标注、自动文件名和导出。识别文字与二维码使用 Dart 合成后交来的 PNG。截图结果用独立 captureId 拒绝过期操作，不属于选区会话。主界面就绪后 `ScreenshotWindowController.prewarm` 预热截图引擎与隐藏面板，首次截图直接复用。
 
 固定目录保存在 UserDefaults 的 `screenshotSaveDirectory`，只通过设置页修改。ScreenshotStorage 通过拒绝覆盖的实际写入和序号处理重名。翻译、输入翻译与截图热键由同一 Carbon 注册事务管理，已有组合交换用途时复用注册，全部新注册成功才更新配置。
 
