@@ -135,8 +135,17 @@ abstract final class StickerMetrics {
   static const thumbnail = 48.0;
   static const thumbnailGap = 8.0;
 
-  /// 贴纸面板操作按钮间距。
+  /// 贴纸下拉框：分段、网格区、「管理贴纸…」之间的间距。
   static const actionGap = 8.0;
+
+  /// 贴纸下拉框网格区高度（6 行）、表情字号、类别标题字号与上下留白。
+  static const gridHeight = 260.0;
+  static const emojiFontSize = 24.0;
+  static const categoryFontSize = 12.0;
+  static const categoryPadding = 4.0;
+
+  /// 贴纸下拉框与「贴纸」按钮、窗口边缘的间距。
+  static const anchorGap = 4.0;
 
   /// 上传框预览区尺寸与棋盘格边长。
   static const previewWidth = 480.0;

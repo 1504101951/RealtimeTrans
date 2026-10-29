@@ -130,12 +130,6 @@ abstract final class MethodNames {
   /// 截图贴纸面板「管理贴纸…」打开设置窗口（#103）。
   static const openStickerSettings = 'openStickerSettings';
 
-  /// 截图贴纸面板「Emoji…」打开 macOS「表情与符号」面板（#103）。
-  static const showCharacterPalette = 'showCharacterPalette';
-
-  /// 原生表情接收器收到的表情交给截图引擎放置为贴纸；参数 id、emoji（#103）。
-  static const emojiPicked = 'emojiPicked';
-
   /// 非激活截图面板的 Delete 键由原生转发，删除当前选中的标注；参数 id（#103）。
   static const deleteScreenshotSelection = 'deleteScreenshotSelection';
 

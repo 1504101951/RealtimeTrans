@@ -8,6 +8,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:translate_app/src/common/constants/emoji_catalog.dart';
 import 'package:translate_app/src/common/constants/screenshot_actions.dart';
 import 'package:translate_app/src/common/constants/preference_keys.dart';
 import 'package:translate_app/src/common/widgets/native_glass.dart';
@@ -19,6 +20,7 @@ import 'package:translate_app/src/history/screenshot_history.dart';
 import 'package:translate_app/src/screenshot/edit_document.dart';
 import 'package:translate_app/src/screenshot/recognized_text_panel.dart';
 import 'package:translate_app/src/screenshot/screenshot_app.dart';
+import 'package:translate_app/src/screenshot/sticker_panel.dart';
 import 'package:translate_app/src/translation/translation_types.dart';
 import 'package:translate_app/src/settings/app_settings.dart';
 
@@ -915,6 +917,9 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const Key(ScreenshotActions.sticker)));
     await tester.pumpAndSettle();
+    // 默认 Emoji 段；切到「贴纸」段后才有我的贴纸格。
+    await tester.tap(find.text('贴纸').last);
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('sticker-cell-red')));
     // 读取贴纸文件与解码使用真实 IO 和图像线程，交替让出真实时间与推进帧。
     for (var i = 0; i < 5; i++) {
@@ -959,10 +964,9 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
   });
 
-  testWidgets('贴纸面板「Emoji…」：关闭面板，原生送来的表情放置为贴纸（#103）', (tester) async {
-    // 边界：64×64 蓝图、无我的贴纸；点「Emoji…」后贴纸面板关闭、不出现输入框；
-    // 原生 emojiPicked 送来当前捕获的表情后放置贴纸。测试字体没有表情字形，用可绘制的「A」代替（字形为实心方块）；
-    // 默认 96pt 超出 64 像素选区，等比缩小到整图后中心像素不再是蓝色。
+  testWidgets('贴纸下拉框：默认 Emoji 段，点表情放置 Emoji 贴纸并收起（#103）', (tester) async {
+    // 边界：64×64 蓝图、无我的贴纸；下拉框默认显示 Emoji 段（首个类别的首个表情格存在，且是懒构建的第一个可见格），
+    // 点该表情格后下拉框关闭；测试环境没有表情字形，放置结果无法按像素断言，只断言下拉框收起且无异常。
     tester.view.physicalSize = const Size(900, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -972,7 +976,6 @@ void main() {
     const channel = MethodChannel('test/screenshot-emoji');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    Uint8List? copied;
     messenger.setMockMethodCallHandler(channel, (call) async {
       switch (call.method) {
         case MethodNames.getScreenshot:
@@ -985,8 +988,6 @@ void main() {
             PreferenceKeys.stickers: const <Object?>[],
             PreferenceKeys.stickerDirectory: '/unused',
           };
-        case MethodNames.copyScreenshot:
-          copied = (call.arguments as Map)['bytes'] as Uint8List;
       }
       return null;
     });
@@ -1001,41 +1002,66 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const Key(ScreenshotActions.sticker)));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('sticker-emoji')));
-    await tester.pumpAndSettle();
-    expect(find.text('我的贴纸'), findsNothing);
-    expect(find.byType(TextField), findsNothing);
-    // 模拟原生表情接收器收到表情后的回调。
-    await messenger.handlePlatformMessage(
-      channel.name,
-      const StandardMethodCodec().encodeMethodCall(
-        const MethodCall(MethodNames.emojiPicked, {
-          'id': 'shot-emoji',
-          'emoji': 'A',
-        }),
-      ),
-      (_) {},
+    final firstEmoji = ValueKey(
+      'emoji-cell-${EmojiCatalog.groups.first.emoji.first}',
     );
-    await tester.pump();
-
-    await tester.ensureVisible(find.byKey(const Key('screenshot-copy')));
-    final center = (await tester.runAsync(() async {
-      await tester.tap(find.byKey(const Key('screenshot-copy')));
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      final codec = await ui.instantiateImageCodec(copied!);
-      final image = (await codec.getNextFrame()).image;
-      final data = (await image.toByteData(
-        format: ui.ImageByteFormat.rawRgba,
-      ))!;
-      final offset = (32 * image.width + 32) * 4;
-      return (
-        data.getUint8(offset),
-        data.getUint8(offset + 1),
-        data.getUint8(offset + 2),
-      );
-    }))!;
-    expect(center, isNot((0, 0, 255)));
+    expect(find.byType(StickerPanel), findsOneWidget);
+    await tester.tap(find.byKey(firstEmoji));
+    await tester.pumpAndSettle();
+    expect(find.byType(StickerPanel), findsNothing);
     await tester.pump(const Duration(seconds: 2));
+  });
+
+  testWidgets('贴纸下拉框：贴纸段「管理贴纸…」收起并发出 openStickerSettings（#103）', (
+    tester,
+  ) async {
+    // 边界：无我的贴纸时贴纸段显示「还没有贴纸」；Emoji 段没有「管理贴纸…」，切到贴纸段才出现；
+    // 点击后下拉框关闭并向原生发出 openStickerSettings（原生再结束截图并打开设置）。
+    tester.view.physicalSize = const Size(900, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final bytes = await tester.runAsync(() => _solidPng(64, 64, _blue));
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
+    const channel = MethodChannel('test/screenshot-sticker-manage');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final methods = <String>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      methods.add(call.method);
+      if (call.method == MethodNames.getScreenshot) {
+        return {
+          'id': 'shot-manage',
+          ...capture!,
+          'capturedAt': 0,
+          'width': 64,
+          'height': 64,
+          PreferenceKeys.stickers: const <Object?>[],
+          PreferenceKeys.stickerDirectory: '/unused',
+        };
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    await awaitCaptureSource(tester);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.ensureVisible(find.byKey(const Key('screenshot-beautify')));
+    await tester.tap(find.byKey(const Key('screenshot-beautify')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key(ScreenshotActions.sticker)));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sticker-manage')), findsNothing);
+    await tester.tap(find.text('贴纸').last);
+    await tester.pumpAndSettle();
+    expect(find.text('还没有贴纸'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('sticker-manage')));
+    await tester.pumpAndSettle();
+    expect(find.byType(StickerPanel), findsNothing);
+    expect(methods, contains(MethodNames.openStickerSettings));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 400));
   });
 
   testWidgets('美化行：未开启美化时下拉禁用，应用背景后可用，「无背景」关闭美化（#103）', (tester) async {
@@ -1436,7 +1462,6 @@ Future<void> _tapExport(WidgetTester tester, Key key) async {
   });
   await tester.pumpAndSettle();
 }
-
 
 const _red = Color(0xFFFF0000);
 const _blue = Color(0xFF0000FF);

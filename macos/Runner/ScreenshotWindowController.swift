@@ -1,7 +1,6 @@
 import Cocoa
 import CoreGraphics
 import FlutterMacOS
-import OSLog
 
 /// 系统截图模块承接权限与冻结帧；Dart 编辑层负责框选变暗、标注与导出。
 final class ScreenshotWindowController: NSObject, NSWindowDelegate {
@@ -29,16 +28,6 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
     private var captureTask: Task<Void, Never>?
     /// 发起冻结截图前的前台应用身份；编辑器获得焦点不改变应用来源排序。
     private var sourceApplicationID: String?
-    /// 系统表情面板的原生接收器：1×1 透明文字视图，收到的每个字素簇经 emojiPicked 交给截图引擎放置为贴纸（#103）。
-    private lazy var emojiReceiver: NSTextView = {
-        let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
-        view.drawsBackground = false
-        view.isRichText = false
-        view.textColor = .clear
-        view.insertionPointColor = .clear
-        view.delegate = self
-        return view
-    }()
     private var captureSources: [[String: Any]] = []
     private var targetPreviews: [NSWindow] = []
     private var previewSource: (kind: String, applicationID: String?)?
@@ -439,22 +428,9 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             // 截图引擎的阶段耗时写入同一性能日志（#68）。
             PerformanceLog.note(args["stage"] as! String, milliseconds: (args["ms"] as! NSNumber).doubleValue)
             result(nil)
-        case AppConstants.showCharacterPaletteMethod:
-            // 原生接收器移到鼠标位置并取得焦点后打开系统表情面板；面板只对拿到焦点的输入弹出（#103）。
-            // 截图引擎只在面板内发起本调用，此时面板必然存在。
-            let panel = window!
-            let content = panel.contentView!
-            if emojiReceiver.superview !== content { content.addSubview(emojiReceiver) }
-            let mouse = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-            emojiReceiver.frame = NSRect(origin: content.convert(mouse, from: nil), size: NSSize(width: 1, height: 1))
-            let focused = panel.makeFirstResponder(emojiReceiver)
-            // 临时诊断：记录打开前的焦点与输入上下文，并观察系统面板窗口的出现、层级与位置（EmojiPaletteDiagnostics）。
-            EmojiPaletteDiagnostics.state(focused: focused, panel: panel, receiver: emojiReceiver)
-            NSApp.orderFrontCharacterPalette(nil)
-            EmojiPaletteDiagnostics.watch(panelLevel: panel.level.rawValue)
-            result(nil)
         case AppConstants.openStickerSettingsMethod:
-            // 「管理贴纸…」打开设置窗口（#103）。
+            // 「管理贴纸…」结束本次截图（与 Esc 相同）再打开设置窗口（#103）。
+            closeForCapture()
             MainActor.assumeIsolated { StatusBarController.shared.showSettings?() }
             result(nil)
         case AppConstants.saveDrawingPreferencesMethod:
@@ -978,17 +954,7 @@ final class ScreenshotPanel: NSPanel {
     }
 }
 
-extension ScreenshotWindowController: NSTextViewDelegate {
-    /// notification 为表情接收器的文字变化；把每个字素簇作为一张 Emoji 贴纸交给截图引擎并清空接收器，无返回值（#103）。
-    func textDidChange(_ notification: Notification) {
-        let text = emojiReceiver.string
-        guard !text.isEmpty, !emojiReceiver.hasMarkedText(), let captureId else { return }
-        emojiReceiver.string = ""
-        for emoji in text {
-            channel?.invokeMethod(AppConstants.emojiPickedMethod, arguments: ["id": captureId, "emoji": String(emoji)])
-        }
-    }
-
+extension ScreenshotWindowController {
     /// notification 为编辑窗关闭通知；释放原始图像并通知 Dart 清空，不撤销已导出文件或贴图。
     func windowWillClose(_ notification: Notification) {
         // cancelCapture 统一清理待启动窗口、冻结任务和当前草稿，保留引擎供下次截图复用。
@@ -1030,71 +996,5 @@ enum ScreenshotTarget {
         case .display:
             return (NSRect(x: 0, y: 0, width: frame.pixelWidth, height: frame.pixelHeight), true)
         }
-    }
-}
-
-
-/// #103 临时诊断：每次截图前一两次点「Emoji…」不出现表情面板。记录打开前的焦点与输入上下文，
-/// 并在 3 秒内记录新出现的其他进程窗口（进程名、层级、位置），判断面板是否未出现、出现在别处或被截图面板盖住；
-/// 只写状态值、类名、进程名与几何。定位原因并修复后删除本类型及其调用。
-enum EmojiPaletteDiagnostics {
-    private static let logger = Logger(subsystem: "TranslateApp", category: "EmojiPalette")
-
-    /// focused 为 makeFirstResponder 的返回值，panel 为截图面板，receiver 为表情接收器；写入一行状态，无返回值。
-    static func state(focused: Bool, panel: NSWindow, receiver: NSTextView) {
-        let current = NSTextInputContext.current
-        let responder = panel.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
-        let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
-        logger.notice("""
-            request focused=\(focused, privacy: .public) responder=\(responder, privacy: .public) \
-            key=\(panel.isKeyWindow, privacy: .public) active=\(NSApp.isActive, privacy: .public) \
-            front=\(front, privacy: .public) receiverContext=\(receiver.inputContext != nil, privacy: .public) \
-            currentIsReceiver=\(current != nil && current === receiver.inputContext, privacy: .public)
-            """)
-    }
-
-    /// panelLevel 为截图面板窗口层级；后台每 50ms 枚举屏上窗口，3 秒内记录最多 3 个新出现的其他进程窗口，
-    /// 写入耗时、进程名、层级与屏幕矩形，并记录其中已出现的窗口在何时消失（gone）；一个都没有时写 none，无返回值。
-    static func watch(panelLevel: Int) {
-        let own = getpid()
-        let start = ContinuousClock.now
-        let before = Set(onScreenWindows().compactMap { $0[kCGWindowNumber as String] as? Int })
-        DispatchQueue.global(qos: .utility).async {
-            var seen = Set<Int>()
-            var gone = Set<Int>()
-            for _ in 0..<60 {
-                Thread.sleep(forTimeInterval: 0.05)
-                let current = onScreenWindows()
-                let numbers = Set(current.compactMap { $0[kCGWindowNumber as String] as? Int })
-                for number in seen.subtracting(gone).subtracting(numbers) {
-                    gone.insert(number)
-                    let duration = start.duration(to: .now).components
-                    let ms = Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1_000_000_000_000_000
-                    logger.notice("gone window=\(number, privacy: .public) ms=\(ms, privacy: .public) active=\(DispatchQueue.main.sync { NSApp.isActive }, privacy: .public)")
-                }
-                for info in current {
-                    let number = info[kCGWindowNumber as String] as? Int ?? 0
-                    guard (info[kCGWindowOwnerPID as String] as? pid_t) != own, !before.contains(number),
-                          !seen.contains(number), seen.count < 3 else { continue }
-                    seen.insert(number)
-                    let owner = info[kCGWindowOwnerName as String] as? String ?? "?"
-                    let layer = info[kCGWindowLayer as String] as? Int ?? 0
-                    let bounds = info[kCGWindowBounds as String] as? [String: CGFloat] ?? [:]
-                    let duration = start.duration(to: .now).components
-                    let ms = Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1_000_000_000_000_000
-                    logger.notice("""
-                        window=\(number, privacy: .public) owner=\(owner, privacy: .public) layer=\(layer, privacy: .public) \
-                        panelLevel=\(panelLevel, privacy: .public) ms=\(ms, privacy: .public) \
-                        bounds=\(bounds.description, privacy: .public)
-                        """)
-                }
-            }
-            if seen.isEmpty { logger.notice("window none within 3000ms") }
-        }
-    }
-
-    /// 无参数；返回屏上窗口信息列表。
-    private static func onScreenWindows() -> [[String: Any]] {
-        CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
     }
 }

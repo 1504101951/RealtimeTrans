@@ -145,6 +145,9 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
   /// 样式弹窗打开中：Esc 关闭弹窗、回车不导出、新截图先关闭弹窗。
   bool _dialogOpen = false;
 
+  /// 工具栏「贴纸」按钮的锚点；贴纸下拉框据此定位，按钮未显示时无锚点。
+  final _stickerAnchor = GlobalKey();
+
   /// 标尺两端（截图像素）；不进入标注与撤销，切换工具或新截图后清除（#111）。
   ({Offset start, Offset end})? _ruler;
 
@@ -293,14 +296,6 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           return;
         }
         _toolbarActions()[args['action']]?.call();
-      } else if (call.method == MethodNames.emojiPicked) {
-        final args = call.arguments as Map;
-        // 原生表情接收器收到的表情；只放到当前捕获上，每个表情一张 Emoji 贴纸（#103）。
-        if (_capture['id'] == null || _capture['id'] != args['id']) return;
-        await _placeSticker(
-          const Size.square(StickerMetrics.emojiDefaultSize),
-          text: args['emoji'] as String,
-        );
       } else if (call.method == MethodNames.deleteScreenshotSelection) {
         // 非激活截图面板的 Delete 由原生转发；只作用于当前捕获，文字输入时留给输入框（#103）。
         final id = (call.arguments as Map)['id'];
@@ -1807,18 +1802,23 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     return null;
   }
 
-  /// 无参数；打开贴纸面板：选中我的贴纸则放到截图上，「Emoji…」请原生打开系统表情面板（表情经 emojiPicked 回来），
-  /// 「管理贴纸…」打开设置窗口，返回弹窗关闭的 Future（#103）。
+  /// 无参数；在「贴纸」按钮下方打开贴纸下拉框：选中表情或我的贴纸则放到截图上并收起，
+  /// 「管理贴纸…」请原生结束本次截图并打开设置窗口，返回弹窗关闭的 Future（#103）。
   Future<void> _openStickerPanel() async {
     final captureId = _capture['id'];
+    // 取按钮的全局矩形作为锚点；按钮未挂载（经快捷动作打开）时为 null，下拉框居中。
+    final anchorBox = _stickerAnchor.currentContext?.findRenderObject();
+    final anchor = anchorBox is RenderBox && anchorBox.attached
+        ? anchorBox.localToGlobal(Offset.zero) & anchorBox.size
+        : null;
     _dialogOpen = true;
     final choice = await showDialog<StickerChoice>(
       context: _editorKey.currentContext!,
-      builder: (_) => Dialog(
-        child: StickerPanel(
-          stickers: _stickers,
-          directory: _stickerDirectory!,
-        ),
+      barrierColor: Colors.transparent,
+      useSafeArea: false,
+      builder: (_) => CustomSingleChildLayout(
+        delegate: StickerPanelLayout(anchor),
+        child: StickerPanel(stickers: _stickers, directory: _stickerDirectory!),
       ),
     );
     _dialogOpen = false;
@@ -1829,10 +1829,10 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           Size(entry.width, entry.height),
           stickerId: entry.id,
         );
-      case RequestEmoji():
-        // 原生把隐形接收器设为焦点后打开系统「表情与符号」面板，面板开着时每选一个表情回调一次。
-        unawaited(
-          widget.channel.invokeMethod<void>(MethodNames.showCharacterPalette),
+      case PickedEmoji(:final emoji):
+        await _placeSticker(
+          const Size.square(StickerMetrics.emojiDefaultSize),
+          text: emoji,
         );
       case ManageStickers():
         unawaited(
@@ -2917,7 +2917,10 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
         ),
       );
       // 每个模式同样需要材料承载；外层工具栏保持透明。
-      return NativeGlassSurface(material: true, child: child);
+      final surface = NativeGlassSurface(material: true, child: child);
+      // 贴纸按钮挂锚点，供贴纸下拉框定位。
+      if (id != ScreenshotActions.sticker) return surface;
+      return KeyedSubtree(key: _stickerAnchor, child: surface);
     }
 
     // 每组沿工具栏方向独立滚动；动态行数只改变工具栏占位，画布像素不参与布局。
