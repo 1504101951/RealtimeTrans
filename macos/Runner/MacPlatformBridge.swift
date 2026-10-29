@@ -305,6 +305,9 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             guard let id = args["id"] as? String else {
                 result(FlutterError(code: AppConstants.badArgsError, message: "缺少服务标识。", details: nil)); return
             }
+            // 钥匙串读取耗时写入性能日志，定位翻译请求前的凭据开销（#68「性能测量边界」）。
+            let readStart = ContinuousClock.now
+            defer { PerformanceLog.record("credentials-read", since: readStart) }
             do { result(try Self.readCredentials(id: id) ?? [:]) }
             catch { result(FlutterError(code: AppConstants.keychainFailedError, message: error.localizedDescription, details: nil)) }
         case AppConstants.credentialIdsMethod:
@@ -332,6 +335,9 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             guard let text = args["text"] as? String else {
                 result(FlutterError(code: AppConstants.badArgsError, message: "缺少待识别文本", details: nil)); return
             }
+            // 设备语言识别耗时写入性能日志，首次调用含模型加载（#68「性能测量边界」）。
+            let detectStart = ContinuousClock.now
+            defer { PerformanceLog.record("translate-detect", since: detectStart) }
             let recognizer = NLLanguageRecognizer()
             recognizer.processString(text)
             let hypothesis = recognizer.languageHypotheses(withMaximum: 1).first

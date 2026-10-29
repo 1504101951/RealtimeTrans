@@ -106,7 +106,7 @@ AX 读取优先使用文本标记范围获取跨节点选区，再读取普通�
 
 应用联合画布编码器将首个实际写入帧的时间固定为零，后续主机经过时间量化到 600 刻度，只写入严格递增的帧时间。首帧成功写入才确认录制就绪；无有效帧时结束明确失败，放弃直接取消写入。
 
-输入翻译通过系统日志 `subsystem=TranslateApp`、`category=Performance` 分段记录耗时（阶段名与毫秒，不含文本）：`input-read`（原生从开始采集到发出选区事件）、`input-first-token`（Dart 从发起翻译到首段非空译文）、`input-complete`（到翻译完整成功）、`input-replace`（`replaceSelection` 粘贴替换）；后三项由 `perfMark` 交原生写入。
+输入翻译通过系统日志 `subsystem=TranslateApp`、`category=Performance` 分段记录耗时（阶段名与毫秒，不含文本）：`input-read`（原生从开始采集到发出选区事件）、`input-first-token`（Dart 从发起翻译到首段非空译文）、`input-complete`（到翻译完整成功）、`input-replace`（`replaceSelection` 粘贴替换）；后三项由 `perfMark` 交原生写入。原生处理 `detectLanguage` 与 `readCredentials` 时另记 `translate-detect`（设备语言识别）与 `credentials-read`（钥匙串读取），所有翻译入口共用。
 
 录制启动通过系统日志 `subsystem=TranslateApp`、`category=CaptureStartup` 记录界面同步工作、来源配置、系统流资源创建、异步启动及实际开始写入的耗时；仅包含固定步骤名和毫秒时长，不包含截图、窗口标题或文件路径。
 
