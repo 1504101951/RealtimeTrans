@@ -1012,11 +1012,11 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
   });
 
-  testWidgets('贴纸下拉框：贴纸段「管理贴纸…」收起并发出 openStickerSettings（#103）', (
+  testWidgets('贴纸下拉框：两段都有「管理贴纸…」且高度不变，点击收起并发出 openStickerSettings（#103）', (
     tester,
   ) async {
-    // 边界：无我的贴纸时贴纸段显示「还没有贴纸」；Emoji 段没有「管理贴纸…」，切到贴纸段才出现；
-    // 点击后下拉框关闭并向原生发出 openStickerSettings（原生再结束截图并打开设置）。
+    // 边界：无我的贴纸时贴纸段显示「还没有贴纸」；Emoji 段已有「管理贴纸…」，切到贴纸段后按钮仍在、下拉框高度不变；
+    // 在贴纸段点击后下拉框关闭并向原生发出 openStickerSettings（原生再结束截图并打开设置）。
     tester.view.physicalSize = const Size(900, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -1052,9 +1052,13 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const Key(ScreenshotActions.sticker)));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('sticker-manage')), findsNothing);
+    expect(find.byKey(const ValueKey('sticker-manage')), findsOneWidget);
+    // 下拉框高度由固定网格区决定，两段一致。
+    final emojiHeight = tester.getSize(find.byType(StickerPanel)).height;
     await tester.tap(find.text('贴纸').last);
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sticker-manage')), findsOneWidget);
+    expect(tester.getSize(find.byType(StickerPanel)).height, emojiHeight);
     expect(find.text('还没有贴纸'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('sticker-manage')));
     await tester.pumpAndSettle();

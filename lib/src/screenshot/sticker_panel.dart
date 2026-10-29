@@ -135,7 +135,7 @@ class _StickerPanelState extends State<StickerPanel> {
     );
   }
 
-  /// context 为弹窗上下文；返回宽 284pt 的玻璃菜单层：分段、260pt 高网格区，贴纸段另有「管理贴纸…」。
+  /// context 为弹窗上下文；返回宽 284pt 的玻璃菜单层：分段、260pt 高网格区与「管理贴纸…」，两段都显示，切换分段时高度不变。
   @override
   Widget build(BuildContext context) {
     final mine = _tab == _StickerTab.mine;
@@ -167,18 +167,17 @@ class _StickerPanelState extends State<StickerPanel> {
                   height: StickerMetrics.gridHeight,
                   child: mine ? _buildMine(context) : _buildEmoji(context),
                 ),
-                if (mine) ...[
-                  const SizedBox(height: StickerMetrics.actionGap),
-                  NativeGlassSurface(
-                    material: true,
-                    child: TextButton(
-                      key: const ValueKey('sticker-manage'),
-                      onPressed: () =>
-                          Navigator.pop(context, const ManageStickers()),
-                      child: const Text('管理贴纸…'),
-                    ),
+                // 「管理贴纸…」两段都显示，切换分段时下拉框高度不变。
+                const SizedBox(height: StickerMetrics.actionGap),
+                NativeGlassSurface(
+                  material: true,
+                  child: TextButton(
+                    key: const ValueKey('sticker-manage'),
+                    onPressed: () =>
+                        Navigator.pop(context, const ManageStickers()),
+                    child: const Text('管理贴纸…'),
                   ),
-                ],
+                ),
               ],
             ),
           ),
