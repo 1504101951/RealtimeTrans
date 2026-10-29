@@ -531,15 +531,16 @@ void main() {
     expect(settings[PreferenceKeys.inputPrimaryLanguage], 'zh-CN');
     expect(tester.takeException(), isNull);
   });
-  testWidgets('处理提示词：恢复默认、空提示词不能保存，保存后自动提交三种提示词（#100）', (tester) async {
+  testWidgets('提示词：四个字段、恢复默认、空提示词不能保存，保存后自动提交提示词与思考开关', (tester) async {
     // 边界：初始润色为自定义值时「恢复默认」可用，点击后回到默认值且按钮禁用；
-    // 纠错清空时显示「提示词不能为空。」且「保存」禁用；填回后保存，提交的偏好含三种提示词。
+    // 纠错清空时显示「提示词不能为空。」且「保存」禁用；填回后保存，提交的偏好含四种提示词；
+    // 弹窗恰有翻译、润色、纠错、解释四个字段，只打开润色思考开关时只有 polishThinking 为 true。
     const channel = MethodChannel(ChannelNames.settings);
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     var settings = <String, Object?>{
       'revision': 0,
-      PreferenceKeys.assistPrompts[TextMode.polish]!: '自定义润色',
+      PreferenceKeys.prompts[TextMode.polish]!: '自定义润色',
     };
     messenger.setMockMethodCallHandler(channel, (call) async {
       if (call.method == MethodNames.systemStatus) {
@@ -567,6 +568,13 @@ void main() {
     await tester.tap(find.text('编辑提示词…'));
     await tester.pumpAndSettle();
 
+    for (final label in ['翻译', '润色', '纠错', '解释']) {
+      expect(find.byKey(ValueKey('提示词-$label')), findsOneWidget);
+      expect(find.byKey(ValueKey('思考-$label')), findsOneWidget);
+    }
+    await tester.tap(find.byKey(const ValueKey('思考-润色')));
+    await tester.pumpAndSettle();
+
     TextButton restore(String label) =>
         tester.widget<TextButton>(find.byKey(ValueKey('恢复默认-$label')));
     expect(restore('润色').onPressed, isNotNull);
@@ -586,13 +594,21 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, '保存'));
     await tester.pumpAndSettle();
     expect(
-      settings[PreferenceKeys.assistPrompts[TextMode.polish]!],
-      defaultAssistPrompts[TextMode.polish],
+      settings[PreferenceKeys.prompts[TextMode.polish]!],
+      defaultPrompts[TextMode.polish],
     );
-    expect(settings[PreferenceKeys.assistPrompts[TextMode.correct]!], '只纠错');
+    expect(settings[PreferenceKeys.prompts[TextMode.correct]!], '只纠错');
+    expect(settings[PreferenceKeys.thinking[TextMode.polish]!], isTrue);
+    for (final mode in [
+      TextMode.translate,
+      TextMode.correct,
+      TextMode.explain,
+    ]) {
+      expect(settings[PreferenceKeys.thinking[mode]!], isFalse);
+    }
     expect(
-      settings[PreferenceKeys.assistPrompts[TextMode.explain]!],
-      defaultAssistPrompts[TextMode.explain],
+      settings[PreferenceKeys.prompts[TextMode.explain]!],
+      defaultPrompts[TextMode.explain],
     );
     expect(tester.takeException(), isNull);
   });

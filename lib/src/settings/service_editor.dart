@@ -30,7 +30,6 @@ class _ServiceEditorState extends State<ServiceEditor> {
   final _name = TextEditingController();
   final _base = TextEditingController();
   final _model = TextEditingController();
-  final _prompt = TextEditingController();
   final _key = TextEditingController();
   final _appId = TextEditingController();
   final _tokens = TextEditingController();
@@ -50,7 +49,6 @@ class _ServiceEditorState extends State<ServiceEditor> {
     _name.text = config?.displayName ?? ServiceConfig.kinds[_kind]!;
     _base.text = config?.baseUrl ?? ServiceConfig.endpoints[_kind]!;
     _model.text = config?.model ?? '';
-    _prompt.text = config?.prompt ?? ServiceConfig.defaultPrompt;
     _tokens.text = '${config?.maxOutputTokens ?? 4096}';
     _semantic = config?.semanticPairs ?? false;
     _key.text = widget.credentials['apiKey'] ?? '';
@@ -60,15 +58,7 @@ class _ServiceEditorState extends State<ServiceEditor> {
   /// 无参数；关闭窗口时释放包含凭据草稿的控制器，无返回值。
   @override
   void dispose() {
-    for (final controller in [
-      _name,
-      _base,
-      _model,
-      _prompt,
-      _key,
-      _appId,
-      _tokens,
-    ]) {
+    for (final controller in [_name, _base, _model, _key, _appId, _tokens]) {
       controller.dispose();
     }
     super.dispose();
@@ -82,7 +72,6 @@ class _ServiceEditorState extends State<ServiceEditor> {
       name: _name.text.trim(),
       baseUrl: _base.text.trim(),
       model: _model.text.trim(),
-      prompt: _prompt.text,
       semanticPairs: _semantic,
       maxOutputTokens: int.tryParse(_tokens.text) ?? 0,
     );
@@ -229,23 +218,6 @@ class _ServiceEditorState extends State<ServiceEditor> {
                     ),
                   ),
                 if (isModel) ...[
-                  const SizedBox(height: 16),
-                  NativeGlassField(
-                    label: '翻译提示词',
-                    child: TextField(
-                      key: ValueKey('翻译提示词'),
-                      controller: _prompt,
-                      enabled: !_testing,
-                      minLines: 4,
-                      maxLines: 8,
-                      decoration: const InputDecoration(
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
-                      ),
-                    ),
-                  ),
                   NativeGlassSwitchTile(
                     title: '按段落双语对照',
                     subtitle: '结合全文逐段翻译；段落缺失或乱序时提示重试。',

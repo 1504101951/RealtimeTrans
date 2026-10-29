@@ -31,6 +31,8 @@ BatchTranslationProvider providerForService(
   return ApiTranslationProvider(
     config: config,
     credentials: () => platform.readCredentials(serviceId),
+    prompt: settings.prompts[TextMode.translate]!,
+    thinking: settings.thinking[TextMode.translate]!,
     glossary: settings.glossary,
   );
 }
@@ -49,7 +51,7 @@ TranslationProvider? assistProviderForSettings(
 );
 
 /// settings/platform 同上，mode 为润色、纠错或解释，serviceId 为服务 id；
-/// 返回使用该服务与「处理提示词」的模型 Provider；服务不是模型服务时返回 null（#100）。
+/// 返回使用该服务与该模式提示词、思考开关的模型 Provider；服务不是模型服务时返回 null（#100）。
 TranslationProvider? assistProviderForService(
   AppSettings settings,
   SettingsPlatform platform,
@@ -65,7 +67,8 @@ TranslationProvider? assistProviderForService(
     config: config,
     credentials: () => platform.readCredentials(config.id),
     mode: mode,
-    assistPrompt: settings.assistPrompts[mode]!,
+    prompt: settings.prompts[mode]!,
+    thinking: settings.thinking[mode]!,
   );
 }
 

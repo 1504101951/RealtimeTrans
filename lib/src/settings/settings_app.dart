@@ -18,7 +18,7 @@ import 'package:flutter/services.dart';
 import '../common/widgets/native_glass.dart';
 
 import 'app_settings.dart';
-import 'assist_prompt_editor.dart';
+import 'prompt_editor.dart';
 import 'sticker_upload_dialog.dart';
 import '../screenshot/stickers.dart';
 import 'glossary_editor.dart';
@@ -413,15 +413,24 @@ class _SettingsPageState extends State<_SettingsPage>
     ),
   );
 
-  /// 无参数；打开处理提示词弹窗，保存后写入草稿并自动提交，取消不改变，返回弹窗关闭的 Future（#100）。
-  Future<void> _editAssistPrompts() async {
-    final prompts = await showDialog<Map<TextMode, String>>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => AssistPromptEditor(prompts: _settings!.assistPrompts),
-    );
-    if (prompts == null || !mounted) return;
-    _edit(() => _settings!.assistPrompts.addAll(prompts));
+  /// 无参数；打开提示词弹窗，保存后把提示词与思考开关写入草稿并自动提交，取消不改变，返回弹窗关闭的 Future（#100）。
+  Future<void> _editPrompts() async {
+    final saved =
+        await showDialog<
+          ({Map<TextMode, String> prompts, Map<TextMode, bool> thinking})
+        >(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => PromptEditor(
+            prompts: _settings!.prompts,
+            thinking: _settings!.thinking,
+          ),
+        );
+    if (saved == null || !mounted) return;
+    _edit(() {
+      _settings!.prompts.addAll(saved.prompts);
+      _settings!.thinking.addAll(saved.thinking);
+    });
   }
 
   /// label/value 为字段名和语言码；optional 允许空值，onChanged 写回表单；返回下拉控件。
@@ -876,7 +885,7 @@ class _SettingsPageState extends State<_SettingsPage>
                             NativeGlassSurface(
                               material: true,
                               child: TextButton(
-                                onPressed: _editAssistPrompts,
+                                onPressed: _editPrompts,
                                 child: const Text('编辑提示词…'),
                               ),
                             ),

@@ -42,7 +42,8 @@ class AppSettings {
     this.launchAtLogin = false,
     Map<String, String>? excludedApps,
     List<GlossaryEntry>? glossary,
-    Map<TextMode, String>? assistPrompts,
+    Map<TextMode, String>? prompts,
+    Map<TextMode, bool>? thinking,
     List<StickerEntry>? stickers,
     this.defaultServiceId = ServiceConfig.builtinId,
     List<ServiceConfig>? services,
@@ -55,7 +56,11 @@ class AppSettings {
            : inputSecondaryLanguage,
        excludedApps = excludedApps ?? {},
        glossary = glossary ?? [],
-       assistPrompts = {...defaultAssistPrompts, ...?assistPrompts},
+       prompts = {...defaultPrompts, ...?prompts},
+       thinking = {
+         for (final mode in TextMode.values) mode: false,
+         ...?thinking,
+       },
        stickers = stickers ?? [],
        services = services ?? [],
        screenshotToolbar = screenshotToolbar ?? ScreenshotToolbarPreferences(),
@@ -120,8 +125,11 @@ class AppSettings {
   /// 术语表；只对模型服务的翻译模式生效，按目标语言与原文命中后写入请求（#104）。
   final List<GlossaryEntry> glossary;
 
-  /// 润色、纠错、解释的系统提示词，所有模型服务共用；缺省为 defaultAssistPrompts（#100）。
-  final Map<TextMode, String> assistPrompts;
+  /// 翻译、润色、纠错、解释的系统提示词，所有模型服务共用；缺省为 defaultPrompts（#100）。
+  final Map<TextMode, String> prompts;
+
+  /// 各处理模式的思考开关，所有模型服务共用，缺省关闭；只对 DeepSeek 与 Anthropic 生效。
+  final Map<TextMode, bool> thinking;
 
   /// 我的贴纸，按添加顺序；文件在 App 数据目录 Stickers/（#103）。
   final List<StickerEntry> stickers;
@@ -220,9 +228,13 @@ class AppSettings {
         for (final entry in map[PreferenceKeys.glossary] as List? ?? [])
           GlossaryEntry.fromMap(entry as Map),
       ],
-      assistPrompts: {
-        for (final entry in PreferenceKeys.assistPrompts.entries)
+      prompts: {
+        for (final entry in PreferenceKeys.prompts.entries)
           if (map[entry.value] case final String prompt) entry.key: prompt,
+      },
+      thinking: {
+        for (final entry in PreferenceKeys.thinking.entries)
+          if (map[entry.value] case final bool enabled) entry.key: enabled,
       },
       stickers: [
         for (final entry in map[PreferenceKeys.stickers] as List? ?? [])
@@ -237,9 +249,9 @@ class AppSettings {
     for (final sticker in stickers) {
       sticker.validate();
     }
-    // 处理提示词为空时模型无从执行（#100）。
-    if (assistPrompts.values.any((prompt) => prompt.trim().isEmpty)) {
-      throw const FormatException('处理提示词不能为空。');
+    // 提示词为空时模型无从执行（#100）。
+    if (prompts.values.any((prompt) => prompt.trim().isEmpty)) {
+      throw const FormatException('提示词不能为空。');
     }
     if (gifFramesPerSecond < 1 ||
         gifFramesPerSecond > 30 ||
@@ -348,8 +360,10 @@ class AppSettings {
     PreferenceKeys.launchAtLogin: launchAtLogin,
     PreferenceKeys.excludedApps: excludedApps,
     PreferenceKeys.glossary: [for (final entry in glossary) entry.toMap()],
-    for (final entry in PreferenceKeys.assistPrompts.entries)
-      entry.value: assistPrompts[entry.key]!,
+    for (final entry in PreferenceKeys.prompts.entries)
+      entry.value: prompts[entry.key]!,
+    for (final entry in PreferenceKeys.thinking.entries)
+      entry.value: thinking[entry.key]!,
     PreferenceKeys.stickers: [for (final sticker in stickers) sticker.toMap()],
   };
 

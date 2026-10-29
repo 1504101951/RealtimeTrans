@@ -14,5 +14,5 @@
 10. [mcp_platforms.dart](mcp_platforms.dart)：定义 MCP 接入平台注册表，并按平台检测、安装和删除 TranslateApp 条目。
 11. [mcp_settings_page.dart](mcp_settings_page.dart)：提供设置 MCP 页的开关、helper 路径、配置复制与接入平台列表。
 12. [glossary_editor.dart](glossary_editor.dart)：术语表管理弹窗与单条术语编辑弹窗，编辑确定前检查同一目标语言下是否重复。
-13. [assist_prompt_editor.dart](assist_prompt_editor.dart)：处理提示词弹窗，编辑润色、纠错、解释的系统提示词并可分别恢复默认。
+13. [prompt_editor.dart](prompt_editor.dart)：提示词弹窗，编辑翻译、润色、纠错、解释的系统提示词与思考开关，可分别恢复默认。
 14. [sticker_upload_dialog.dart](sticker_upload_dialog.dart)：添加贴纸的上传框，棋盘格预览并拖动四角等比设定默认大小。

@@ -4,6 +4,7 @@ import '../common/constants/error_codes.dart';
 import '../common/constants/method_names.dart';
 import '../common/constants/preference_keys.dart';
 import '../common/constants/system_translation.dart';
+import '../common/constants/text_mode.dart';
 import '../platform/settings_platform.dart';
 import '../translation/providers/api_translation_provider.dart';
 import '../translation/providers/apple_translation_provider.dart';
@@ -154,9 +155,12 @@ class SettingsController {
       ...await platform.readCredentials(config.id),
       ...Map<String, String>.from(map['credentials'] as Map),
     };
+    // 测试连接使用已提交的翻译提示词与思考开关，与实际翻译一致。
     final provider = ApiTranslationProvider(
       config: config,
       credentials: () async => credentials,
+      prompt: _current.prompts[TextMode.translate]!,
+      thinking: _current.thinking[TextMode.translate]!,
     );
     final result = StringBuffer();
     var completed = false;

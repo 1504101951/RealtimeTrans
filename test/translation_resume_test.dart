@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:translate_app/src/common/constants/text_mode.dart';
 import 'package:translate_app/src/selection/selection_session.dart';
 import 'package:translate_app/src/settings/service_config.dart';
 import 'package:translate_app/src/translation/language_direction.dart';
@@ -60,6 +61,8 @@ void main() {
         model: 'test',
       ),
       credentials: () async => {'apiKey': 'local-test'},
+      prompt: defaultPrompts[TextMode.translate]!,
+      thinking: false,
     );
     final session = SelectionSession(
       provider: provider,

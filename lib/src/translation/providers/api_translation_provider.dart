@@ -16,21 +16,25 @@ import '../translation_types.dart';
 /// 配置型翻译服务。单篇翻译每个请求独占连接；批量翻译使用调用方传入的连接。
 class ApiTranslationProvider implements BatchTranslationProvider {
   /// config/credentials 为服务配置与凭据读取；mode 为处理模式，翻译外的模式只用于模型服务；
-  /// assistPrompt 为润色、纠错或解释的系统提示词，非翻译模式必须提供，翻译模式为 null；
+  /// prompt 为该模式的系统提示词，thinking 为该模式的思考开关，二者只对模型服务生效；
   /// glossary 为术语表，只有模型服务的翻译请求使用。
   ApiTranslationProvider({
     required this.config,
     required this.credentials,
+    required this.prompt,
+    required this.thinking,
     this.mode = TextMode.translate,
-    this.assistPrompt,
     this.glossary = const [],
-  }) : assert((mode == TextMode.translate) == (assistPrompt == null));
+  });
   final ServiceConfig config;
   final Future<Map<String, String>> Function() credentials;
   final TextMode mode;
 
-  /// 润色、纠错与解释使用的系统提示词，来自「处理提示词」设置（#100）。
-  final String? assistPrompt;
+  /// 本模式的系统提示词，来自设置中全部模型服务共用的提示词（#100）。
+  final String prompt;
+
+  /// 本模式是否开启思考；DeepSeek 与 Anthropic 按协议发送，OpenAI 官方与其他兼容端点不发送。
+  final bool thinking;
 
   /// 翻译模式的术语表；润色、纠错与解释的 Provider 不传入（#104）。
   final List<GlossaryEntry> glossary;
@@ -120,7 +124,8 @@ class ApiTranslationProvider implements BatchTranslationProvider {
     Future<void> run() async {
       final Map<String, String> secret;
       try {
-        config.validate();
+        // _validateRequest 校验服务配置与本模式的思考预算。
+        _validateRequest();
         secret = await credentials();
         config.validateCredentials(secret);
       } on FormatException catch (error) {
@@ -150,15 +155,15 @@ class ApiTranslationProvider implements BatchTranslationProvider {
             target: request.targetLanguage,
           );
         default:
-          // 润色、纠错与解释使用设置中的处理提示词，不使用服务配置中的翻译提示词。
-          final assist = assistPrompt;
+          // 润色、纠错与解释直接使用本模式提示词；翻译在提示词后追加术语与输出格式要求。
+          final assist = mode == TextMode.translate ? null : prompt;
           // glossaryHits 只取原文出现且目标语言一致的术语；没有命中时请求与无术语表时一致。
           final terms = glossaryHits(glossary, [
             request.sourceText,
           ], request.targetLanguage);
           final system =
               assist ??
-              config.prompt +
+              prompt +
                   (terms.isEmpty ? '' : _glossaryInstruction) +
                   (semantic
                       ? '\n本次启用双语段落对照，以下格式要求优先于“只输出译文”：'
@@ -288,7 +293,8 @@ class ApiTranslationProvider implements BatchTranslationProvider {
     Future<void> run() async {
       final Map<String, String> secret;
       try {
-        config.validate();
+        // _validateRequest 校验服务配置与本模式的思考预算。
+        _validateRequest();
         secret = await credentials();
         config.validateCredentials(secret);
       } on FormatException catch (error) {
@@ -333,7 +339,7 @@ class ApiTranslationProvider implements BatchTranslationProvider {
             http,
             secret,
             system:
-                config.prompt +
+                prompt +
                 (terms.isEmpty ? '' : _glossaryInstruction) +
                 _batchInstruction,
             input: jsonEncode({
@@ -498,6 +504,17 @@ class ApiTranslationProvider implements BatchTranslationProvider {
     );
   }
 
+  /// 无参数；校验服务配置，并在 Anthropic 开启思考时要求最大输出大于思考预算，不满足时抛 FormatException，无返回值。
+  void _validateRequest() {
+    config.validate();
+    const budget = NetworkLimits.anthropicThinkingBudget;
+    if (thinking &&
+        config.kind == 'anthropic' &&
+        config.maxOutputTokens <= budget) {
+      throw const FormatException('开启思考时，最大输出须大于思考预算 $budget tokens。');
+    }
+  }
+
   /// http 为待发送请求，secret 为凭据；system 为系统提示词，input 为用户消息；
   /// jsonObject 为真时要求 DeepSeek 返回 JSON 对象。写入流式模型请求体，无返回值。
   void _writeModel(
@@ -521,8 +538,9 @@ class ApiTranslationProvider implements BatchTranslationProvider {
       body = {
         'model': config.model,
         'stream': true,
-        // DeepSeek 用协议参数关闭思考；提示词中的 no_think 不能替代接口约束。
-        if (isDeepSeek) 'thinking': {'type': 'disabled'},
+        // DeepSeek 按本模式开关用协议参数开关思考；提示词中的 no_think 不能替代接口约束。
+        // OpenAI 官方与其他兼容端点的思考参数随模型而变，不发送，由模型默认决定。
+        if (isDeepSeek) 'thinking': {'type': thinking ? 'enabled' : 'disabled'},
         if (jsonObject && isDeepSeek)
           'response_format': {'type': 'json_object'},
         'messages': [
@@ -533,10 +551,12 @@ class ApiTranslationProvider implements BatchTranslationProvider {
     } else {
       if (apiKey.isNotEmpty) http.headers.set('x-api-key', apiKey);
       http.headers.set('anthropic-version', '2023-06-01');
+      const budget = NetworkLimits.anthropicThinkingBudget;
       body = {
         'model': config.model,
         'stream': true,
         'max_tokens': config.maxOutputTokens,
+        if (thinking) 'thinking': {'type': 'enabled', 'budget_tokens': budget},
         'system': system,
         'messages': [
           {'role': 'user', 'content': input},

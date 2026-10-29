@@ -157,19 +157,33 @@ void main() {
     expect(restored.validate, throwsFormatException);
   });
 
-  test('处理提示词缺省为默认值，修改后可往返保存，空提示词被拒绝（#100）', () {
-    // 边界：未保存过时三种模式都等于默认提示词；只改润色后往返仍保持其余两种为默认；润色改为空白时校验失败。
+  test('提示词缺省为默认值、思考缺省全部关闭，修改后可往返保存，空提示词被拒绝', () {
+    // 边界：未保存过时四种模式提示词都等于默认值、思考全为 false；只改翻译提示词与润色思考后往返仍保持，
+    // 其余模式不变；润色提示词改为空白时校验失败。
     final settings = AppSettings(primaryLanguage: 'zh-CN');
-    expect(settings.assistPrompts, defaultAssistPrompts);
-    settings.assistPrompts[TextMode.polish] = '只改润色';
+    expect(settings.prompts, defaultPrompts);
+    expect(settings.prompts.keys, containsAll(TextMode.values));
+    expect(settings.thinking, {
+      for (final mode in TextMode.values) mode: false,
+    });
+    settings.prompts[TextMode.translate] = '只改翻译';
+    settings.prompts[TextMode.polish] = '只改润色';
+    settings.thinking[TextMode.polish] = true;
     final restored = AppSettings.fromMap(settings.toMap());
-    expect(restored.assistPrompts[TextMode.polish], '只改润色');
+    expect(restored.prompts[TextMode.translate], '只改翻译');
+    expect(restored.prompts[TextMode.polish], '只改润色');
     expect(
-      restored.assistPrompts[TextMode.explain],
-      defaultAssistPrompts[TextMode.explain],
+      restored.prompts[TextMode.explain],
+      defaultPrompts[TextMode.explain],
     );
+    expect(restored.thinking, {
+      TextMode.translate: false,
+      TextMode.polish: true,
+      TextMode.correct: false,
+      TextMode.explain: false,
+    });
     expect(restored.validate, returnsNormally);
-    restored.assistPrompts[TextMode.polish] = '  ';
+    restored.prompts[TextMode.polish] = '  ';
     expect(restored.validate, throwsFormatException);
   });
 

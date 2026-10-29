@@ -37,6 +37,8 @@ void main() {
     ),
     credentials: () async => secrets,
     glossary: glossary,
+    prompt: defaultPrompts[TextMode.translate]!,
+    thinking: false,
   );
 
   test('百度表单正确编码原文与签名，Google 解码文本实体且携带 API 凭据', () async {
@@ -203,6 +205,8 @@ void main() {
           model: 'local-model',
         ),
         credentials: () async => const {},
+        prompt: defaultPrompts[TextMode.translate]!,
+        thinking: false,
       ).translate(request).toList();
       if (kind == 'google') {
         expect(
@@ -286,6 +290,8 @@ void main() {
     final active = ApiTranslationProvider(
       config: config,
       credentials: () async => secrets,
+      prompt: defaultPrompts[TextMode.translate]!,
+      thinking: false,
     );
     final events = <TranslationEvent>[];
     final subscription = active.translate(request).listen(events.add);
@@ -297,6 +303,8 @@ void main() {
     final pending = ApiTranslationProvider(
       config: config,
       credentials: () => secret.future,
+      prompt: defaultPrompts[TextMode.translate]!,
+      thinking: false,
     ).translate(request).listen(events.add);
     await pending.cancel();
     secret.complete(secrets);
@@ -363,7 +371,7 @@ void main() {
       final body = jsonDecode(await utf8.decoder.bind(incoming).join()) as Map;
       final system = body['messages'][0]['content'] as String;
       expect(system, '自定义润色提示词');
-      expect(system, isNot(contains(ServiceConfig.defaultPrompt)));
+      expect(system, isNot(contains(defaultPrompts[TextMode.translate]!)));
       expect(body.containsKey('response_format'), isFalse);
       final input = jsonDecode(body['messages'][1]['content'] as String) as Map;
       expect(input['text'], source);
@@ -385,7 +393,8 @@ void main() {
               ),
               credentials: () async => secrets,
               mode: TextMode.polish,
-              assistPrompt: '自定义润色提示词',
+              prompt: '自定义润色提示词',
+              thinking: false,
             )
             .translate(
               const TranslationRequest(
@@ -458,6 +467,106 @@ void main() {
     expect(pairs.map((pair) => pair.source).join(), source);
     expect(pairs.map((pair) => pair.translation), ['第一段。', '\n\n第二段。']);
     await serving;
+  });
+
+  /// kind/baseUrl 指定协议与地址（baseUrl 为空时用 server 本地地址），thinking 为思考开关，maxOutputTokens 为最大输出；
+  /// 向 server 发一次翻译并返回服务端收到的请求体 JSON，及客户端得到的全部事件。
+  Future<(Map<String, Object?>?, List<TranslationEvent>)> sendOnce(
+    String kind,
+    HttpServer server, {
+    required bool thinking,
+    int maxOutputTokens = 4096,
+    String? host,
+  }) async {
+    Map<String, Object?>? received;
+    final sub = server.listen((incoming) async {
+      received = jsonDecode(
+        await utf8.decoder.bind(incoming).join(),
+      ) as Map<String, Object?>;
+      incoming.response.write(
+        kind == 'anthropic'
+            ? 'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"你好"}}\n\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n'
+            : 'data: {"choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+      );
+      await incoming.response.close();
+    });
+    addTearDown(sub.cancel);
+    final events = await ApiTranslationProvider(
+      config: ServiceConfig(
+        id: 'test',
+        kind: kind,
+        name: 'Test',
+        baseUrl: host ?? 'http://127.0.0.1:${server.port}',
+        model: 'test-model',
+        maxOutputTokens: maxOutputTokens,
+      ),
+      credentials: () async => secrets,
+      prompt: defaultPrompts[TextMode.polish]!,
+      mode: TextMode.polish,
+      thinking: thinking,
+    ).translate(request).toList();
+    return (received, events);
+  }
+
+  test('DeepSeek 按思考开关发送 thinking.type 为 enabled 或 disabled', () async {
+    // 作用：思考开关决定 DeepSeek 请求体的 thinking 参数。
+    // 边界：开关只有 true/false 两个取值，两侧各验证一次。
+    for (final thinking in [true, false]) {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final (body, events) = await sendOnce(
+        'deepseek',
+        server,
+        thinking: thinking,
+      );
+      expect(events.last, isA<TranslationCompleted>());
+      expect(body!['thinking'], {'type': thinking ? 'enabled' : 'disabled'});
+    }
+  });
+
+  test('Anthropic 开启思考发送 2048 预算，关闭不发送，最大输出不大于预算时连接前失败', () async {
+    // 作用：思考参数只在开启时发送，且预算必须小于最大输出。
+    // 边界：预算 2048；最大输出 4096 大于预算可发送，2048 等于预算必须失败，且服务端收不到连接。
+    final on = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => on.close(force: true));
+    final (onBody, onEvents) = await sendOnce('anthropic', on, thinking: true);
+    expect(onEvents.last, isA<TranslationCompleted>());
+    expect(onBody!['thinking'], {'type': 'enabled', 'budget_tokens': 2048});
+
+    final off = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => off.close(force: true));
+    final (offBody, offEvents) = await sendOnce(
+      'anthropic',
+      off,
+      thinking: false,
+    );
+    expect(offEvents.last, isA<TranslationCompleted>());
+    expect(offBody!.containsKey('thinking'), isFalse);
+
+    final small = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => small.close(force: true));
+    final (smallBody, smallEvents) = await sendOnce(
+      'anthropic',
+      small,
+      thinking: true,
+      maxOutputTokens: 2048,
+    );
+    expect(smallBody, isNull);
+    expect(
+      (smallEvents.single as TranslationFailure).message,
+      contains('开启思考时，最大输出须大于思考预算 2048 tokens。'),
+    );
+  });
+
+  test('OpenAI 官方端点即使开启思考也不发送思考参数', () async {
+    // 作用：OpenAI 协议不支持统一的思考参数，开关对其无请求体影响。
+    // 边界：thinking 为 true 的情形下，thinking 与 reasoning_effort 两个键都不得出现。
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    final (body, events) = await sendOnce('openai', server, thinking: true);
+    expect(events.last, isA<TranslationCompleted>());
+    expect(body!.containsKey('thinking'), isFalse);
+    expect(body.containsKey('reasoning_effort'), isFalse);
   });
 
   /// events 为一次批量翻译的全部事件；返回各下标累计的译文。

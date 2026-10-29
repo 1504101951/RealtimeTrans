@@ -47,11 +47,20 @@ abstract final class PreferenceKeys {
 
   static const primaryLanguage = 'primaryLanguage';
 
-  /// 润色、纠错、解释的系统提示词；键按处理模式对应，缺省为 defaultAssistPrompts（#100）。
-  static const assistPrompts = {
+  /// 翻译、润色、纠错、解释的系统提示词；键按处理模式对应，缺省为 defaultPrompts（#100）。
+  static const prompts = {
+    TextMode.translate: 'translatePrompt',
     TextMode.polish: 'polishPrompt',
     TextMode.correct: 'correctPrompt',
     TextMode.explain: 'explainPrompt',
+  };
+
+  /// 各处理模式的思考开关；缺省 false，只对 DeepSeek 与 Anthropic 生效。
+  static const thinking = {
+    TextMode.translate: 'translateThinking',
+    TextMode.polish: 'polishThinking',
+    TextMode.correct: 'correctThinking',
+    TextMode.explain: 'explainThinking',
   };
 
   static const screenshotSaveDirectory = 'screenshotSaveDirectory';
