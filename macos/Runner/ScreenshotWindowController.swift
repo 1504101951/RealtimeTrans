@@ -1,6 +1,7 @@
 import Cocoa
 import CoreGraphics
 import FlutterMacOS
+import OSLog
 
 /// 系统截图模块承接权限与冻结帧；Dart 编辑层负责框选变暗、标注与导出。
 final class ScreenshotWindowController: NSObject, NSWindowDelegate {
@@ -440,8 +441,12 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         case AppConstants.showCharacterPaletteMethod:
             // 表情经 NSTextInputClient 写入当前获得焦点的 Flutter 输入框（#103）。
             result(nil)
+            // 临时诊断：记录请求时的焦点状态与系统面板出现耗时（EmojiPaletteDiagnostics）。
+            let requested = ContinuousClock.now
+            EmojiPaletteDiagnostics.state("emoji-request", window: window)
             if NSApp.isActive {
                 NSApp.orderFrontCharacterPalette(nil)
+                EmojiPaletteDiagnostics.watchPalette(since: requested)
                 return
             }
             // 非激活截图面板中系统表情面板响应慢：先临时激活本应用，激活完成后再打开（#68）。
@@ -452,8 +457,11 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
                 forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
             ) { [weak self] _ in
                 NotificationCenter.default.removeObserver(observer!)
+                PerformanceLog.record("emoji-activate", since: requested)
                 self?.window?.makeKey()
+                EmojiPaletteDiagnostics.state("emoji-activated", window: self?.window)
                 NSApp.orderFrontCharacterPalette(nil)
+                EmojiPaletteDiagnostics.watchPalette(since: requested)
             }
             NSApp.activate()
         case AppConstants.openStickerSettingsMethod:
@@ -1023,5 +1031,46 @@ enum ScreenshotTarget {
         case .display:
             return (NSRect(x: 0, y: 0, width: frame.pixelWidth, height: frame.pixelHeight), true)
         }
+    }
+}
+
+/// #103 临时诊断：Emoji 面板在截图中打开慢。记录请求与激活后的焦点状态，并轮询系统表情面板窗口出现的耗时；
+/// 只写阶段名、毫秒、类名与进程名，写入 Performance 日志。定位到原因并修复后删除本类型及其调用。
+enum EmojiPaletteDiagnostics {
+    private static let logger = Logger(subsystem: "TranslateApp", category: "Performance")
+
+    /// stage 为固定阶段名，window 为截图面板；写入应用激活、面板 key、第一响应者类名与当前输入上下文是否存在，无返回值。
+    static func state(_ stage: String, window: NSWindow?) {
+        let responder = window?.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+        let context = NSTextInputContext.current != nil
+        logger.notice("stage=\(stage, privacy: .public) active=\(NSApp.isActive, privacy: .public) key=\(window?.isKeyWindow == true, privacy: .public) responder=\(responder, privacy: .public) inputContext=\(context, privacy: .public)")
+    }
+
+    /// start 为收到打开请求的时刻；后台每 50ms 枚举屏上窗口，把首个新出现的其他进程窗口记为系统面板出现，
+    /// 写入进程名与毫秒数，5 秒内未出现记为 none，无返回值。
+    static func watchPalette(since start: ContinuousClock.Instant) {
+        let own = getpid()
+        let before = Set(onScreenWindows().compactMap { $0[kCGWindowNumber as String] as? Int })
+        DispatchQueue.global(qos: .utility).async {
+            for _ in 0..<100 {
+                Thread.sleep(forTimeInterval: 0.05)
+                let appeared = onScreenWindows().first {
+                    ($0[kCGWindowOwnerPID as String] as? pid_t) != own
+                        && !before.contains($0[kCGWindowNumber as String] as? Int ?? 0)
+                }
+                guard let appeared else { continue }
+                let owner = appeared[kCGWindowOwnerName as String] as? String ?? "?"
+                let duration = start.duration(to: .now).components
+                let ms = Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1_000_000_000_000_000
+                logger.notice("stage=emoji-palette-window owner=\(owner, privacy: .public) duration_ms=\(ms, privacy: .public)")
+                return
+            }
+            logger.notice("stage=emoji-palette-window owner=none duration_ms=5000")
+        }
+    }
+
+    /// 无参数；返回屏上窗口信息列表。
+    private static func onScreenWindows() -> [[String: Any]] {
+        CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
     }
 }
