@@ -1,6 +1,7 @@
 import Cocoa
 import CoreGraphics
 import FlutterMacOS
+import OSLog
 
 /// 系统截图模块承接权限与冻结帧；Dart 编辑层负责框选变暗、标注与导出。
 final class ScreenshotWindowController: NSObject, NSWindowDelegate {
@@ -446,8 +447,11 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             if emojiReceiver.superview !== content { content.addSubview(emojiReceiver) }
             let mouse = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
             emojiReceiver.frame = NSRect(origin: content.convert(mouse, from: nil), size: NSSize(width: 1, height: 1))
-            panel.makeFirstResponder(emojiReceiver)
+            let focused = panel.makeFirstResponder(emojiReceiver)
+            // 临时诊断：记录打开前的焦点与输入上下文，并观察系统面板窗口的出现、层级与位置（EmojiPaletteDiagnostics）。
+            EmojiPaletteDiagnostics.state(focused: focused, panel: panel, receiver: emojiReceiver)
             NSApp.orderFrontCharacterPalette(nil)
+            EmojiPaletteDiagnostics.watch(panelLevel: panel.level.rawValue)
             result(nil)
         case AppConstants.openStickerSettingsMethod:
             // 「管理贴纸…」打开设置窗口（#103）。
@@ -1029,3 +1033,59 @@ enum ScreenshotTarget {
     }
 }
 
+
+/// #103 临时诊断：每次截图前一两次点「Emoji…」不出现表情面板。记录打开前的焦点与输入上下文，
+/// 并在 3 秒内记录新出现的其他进程窗口（进程名、层级、位置），判断面板是否未出现、出现在别处或被截图面板盖住；
+/// 只写状态值、类名、进程名与几何。定位原因并修复后删除本类型及其调用。
+enum EmojiPaletteDiagnostics {
+    private static let logger = Logger(subsystem: "TranslateApp", category: "EmojiPalette")
+
+    /// focused 为 makeFirstResponder 的返回值，panel 为截图面板，receiver 为表情接收器；写入一行状态，无返回值。
+    static func state(focused: Bool, panel: NSWindow, receiver: NSTextView) {
+        let current = NSTextInputContext.current
+        let responder = panel.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+        let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
+        logger.notice("""
+            request focused=\(focused, privacy: .public) responder=\(responder, privacy: .public) \
+            key=\(panel.isKeyWindow, privacy: .public) active=\(NSApp.isActive, privacy: .public) \
+            front=\(front, privacy: .public) receiverContext=\(receiver.inputContext != nil, privacy: .public) \
+            currentIsReceiver=\(current != nil && current === receiver.inputContext, privacy: .public)
+            """)
+    }
+
+    /// panelLevel 为截图面板窗口层级；后台每 50ms 枚举屏上窗口，3 秒内记录最多 3 个新出现的其他进程窗口，
+    /// 写入耗时、进程名、层级与屏幕矩形；一个都没有时写 none，无返回值。
+    static func watch(panelLevel: Int) {
+        let own = getpid()
+        let start = ContinuousClock.now
+        let before = Set(onScreenWindows().compactMap { $0[kCGWindowNumber as String] as? Int })
+        DispatchQueue.global(qos: .utility).async {
+            var seen = Set<Int>()
+            for _ in 0..<60 {
+                Thread.sleep(forTimeInterval: 0.05)
+                for info in onScreenWindows() {
+                    let number = info[kCGWindowNumber as String] as? Int ?? 0
+                    guard (info[kCGWindowOwnerPID as String] as? pid_t) != own, !before.contains(number),
+                          !seen.contains(number), seen.count < 3 else { continue }
+                    seen.insert(number)
+                    let owner = info[kCGWindowOwnerName as String] as? String ?? "?"
+                    let layer = info[kCGWindowLayer as String] as? Int ?? 0
+                    let bounds = info[kCGWindowBounds as String] as? [String: CGFloat] ?? [:]
+                    let duration = start.duration(to: .now).components
+                    let ms = Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1_000_000_000_000_000
+                    logger.notice("""
+                        window owner=\(owner, privacy: .public) layer=\(layer, privacy: .public) \
+                        panelLevel=\(panelLevel, privacy: .public) ms=\(ms, privacy: .public) \
+                        bounds=\(bounds.description, privacy: .public)
+                        """)
+                }
+            }
+            if seen.isEmpty { logger.notice("window none within 3000ms") }
+        }
+    }
+
+    /// 无参数；返回屏上窗口信息列表。
+    private static func onScreenWindows() -> [[String: Any]] {
+        CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+    }
+}
