@@ -158,8 +158,8 @@ final class InputStatusBubble {
     /// 每次显示、关闭或重新计时都递增，使旧计时（浮标延迟、失败气泡到时）失效，不影响新内容。
     private var generation = 0
 
-    /// anchor 为选中区域（AppKit 全局坐标）；等待 inputProgressDelayMs 后仍未被收起才显示「翻译中…」浮标，忽略鼠标事件，无返回值。
-    func showProgress(anchor: NSRect) {
+    /// anchor 为定位依据（选中区域与来源窗口，AppKit 全局坐标）；等待 inputProgressDelayMs 后仍未被收起才显示「翻译中…」浮标，忽略鼠标事件，无返回值。
+    func showProgress(anchor: InputAnchor) {
         close()
         let current = generation
         Task { @MainActor [weak self] in
@@ -189,8 +189,8 @@ final class InputStatusBubble {
         }
     }
 
-    /// message 为失败原因，anchor 为选中区域（AppKit 全局坐标）；先收起进行中浮标并替换旧气泡，到时或点击后关闭，无返回值。
-    func showFailure(_ message: String, anchor: NSRect) {
+    /// message 为失败原因，anchor 为定位依据（选中区域与来源窗口，AppKit 全局坐标）；先收起进行中浮标并替换旧气泡，到时或点击后关闭，无返回值。
+    func showFailure(_ message: String, anchor: InputAnchor) {
         close()
         let padding = AppConstants.scrollHintPadding
         // hintTextSize/hintText 与长截图提示共用文字排版：13/18、最大宽 240pt 换行。
@@ -227,13 +227,15 @@ final class InputStatusBubble {
         if kind == .progress || kind == nil { close() }
     }
 
-    /// content 为面板内容，size 为内容尺寸，anchor 为选中区域，kind 为内容种类，ignoresMouse 为是否点击穿透；
+    /// content 为面板内容，size 为内容尺寸，anchor 为定位依据，kind 为内容种类，ignoresMouse 为是否点击穿透；
     /// 按统一位置规则显示非激活玻璃面板，返回包裹内容的玻璃视图。
     @discardableResult
-    private func present(content: NSView, size: NSSize, anchor: NSRect, kind: Kind, ignoresMouse: Bool) -> NSGlassEffectView {
+    private func present(content: NSView, size: NSSize, anchor: InputAnchor, kind: Kind, ignoresMouse: Bool) -> NSGlassEffectView {
         // 锚点所在屏；锚点不在任何屏幕上时按主屏放置。
-        let screen = NSScreen.screens.first { $0.frame.intersects(anchor) } ?? NSScreen.screens[0]
-        let frame = Self.frame(size: size, anchor: anchor, visible: screen.visibleFrame)
+        let screen = NSScreen.screens.first { $0.frame.intersects(anchor.selection) } ?? NSScreen.screens[0]
+        // 可用区域为锚点所在屏可见区与来源窗口的交集，气泡不越出来源窗口。
+        let area = Self.availableArea(visible: screen.visibleFrame, window: anchor.window)
+        let frame = Self.frame(size: size, anchor: anchor.selection, area: area)
         let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
@@ -258,13 +260,30 @@ final class InputStatusBubble {
         return NSSize(width: width.rounded(.up), height: AppConstants.inputProgressHeight)
     }
 
-    /// size 为气泡尺寸，anchor 为选中区域，visible 为锚点所在屏可用区（均为 AppKit 坐标）；
-    /// 返回锚点下方 8pt、放不下时上方 8pt、左边对齐并限制在可用区水平范围内的整点位置。
-    nonisolated static func frame(size: NSSize, anchor: NSRect, visible: NSRect) -> NSRect {
+    /// visible 为锚点所在屏可见区，window 为来源应用窗口矩形（可为 nil，均为 AppKit 坐标）；
+    /// 返回二者的交集，没有窗口或交集为空时返回 visible。
+    nonisolated static func availableArea(visible: NSRect, window: NSRect?) -> NSRect {
+        guard let window else { return visible }
+        let overlap = visible.intersection(window)
+        return overlap.isEmpty ? visible : overlap
+    }
+
+    /// size 为气泡尺寸，anchor 为选中区域，area 为可用区域（均为 AppKit 坐标）；
+    /// 返回锚点下方 8pt、放不下时上方 8pt、上下都放不下时贴可用区域底部，左边与锚点对齐并限制在可用区域内的整点位置。
+    nonisolated static func frame(size: NSSize, anchor: NSRect, area: NSRect) -> NSRect {
         let gap = AppConstants.inputFailureGap
         let below = anchor.minY - gap - size.height
-        let y = below >= visible.minY ? below : anchor.maxY + gap
-        let x = min(max(anchor.minX, visible.minX), visible.maxX - size.width)
+        let above = anchor.maxY + gap
+        // 下方放得下用下方；否则上方放得下用上方；都放不下贴区域底部，再保证不超出区域顶部。
+        let y: CGFloat
+        if below >= area.minY {
+            y = below
+        } else if above + size.height <= area.maxY {
+            y = above
+        } else {
+            y = min(area.minY, area.maxY - size.height)
+        }
+        let x = min(max(anchor.minX, area.minX), area.maxX - size.width)
         return NSRect(x: x.rounded(), y: y.rounded(), width: size.width, height: size.height)
     }
 }

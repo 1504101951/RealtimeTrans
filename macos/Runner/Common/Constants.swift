@@ -248,6 +248,9 @@ enum AppConstants {
     /// 输入翻译失败气泡的显示时长（毫秒）与距锚点的间距（#99）。
     static let inputFailureDurationMs = 2500
     static let inputFailureGap: CGFloat = 8
+    /// 输入翻译锚点使用的文本标记范围属性名（Electron/WebKit 的只读文本，SDK 未提供常量）：选区范围与按范围取屏幕矩形。
+    static let axSelectedTextMarkerRangeAttribute = "AXSelectedTextMarkerRange"
+    static let axBoundsForTextMarkerRangeAttribute = "AXBoundsForTextMarkerRange"
     /// 输入翻译进行中浮标（#67）：读取原文后等待的毫秒数、文案、字号、高度、圆角、水平内边距、转圈边长与转圈到文字的间距。
     static let inputProgressDelayMs = 300
     static let inputProgressText = "翻译中…"

@@ -50,7 +50,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
     }
     private var pendingAppReady = false
     /// 当前输入翻译会话的浮标与失败气泡锚点（AppKit 全局坐标），非输入翻译会话为 nil（#99）。
-    private var inputAnchor: NSRect?
+    private var inputAnchor: InputAnchor?
     var closePermissionWizard: (() -> Void)?
     var shortcutRecorder: ((UInt32, UInt32) -> Void)?
     private var currentSessionId: String?
@@ -718,7 +718,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
     }
 
     /// text 为选中文字，gesture 为手势，x/y 为屏幕锚点，sourcePID 为来源进程、sourceAppName为采集时冻结的应用名；发送新会话，无返回值。
-    func emitSelectionCaptured(text: String, gesture: String, x: CGFloat, y: CGFloat, sourcePID: pid_t, sourceAppName: String?, inputAnchor: NSRect? = nil) {
+    func emitSelectionCaptured(text: String, gesture: String, x: CGFloat, y: CGFloat, sourcePID: pid_t, sourceAppName: String?, inputAnchor: InputAnchor? = nil) {
         guard !retainsResult || SelectionGesture(rawValue: gesture)?.isExplicit == true else { return }
         // 只有显式热键可以替换保留的结果；被动手势不打断阅读或正在进行的翻译。
         retainsResult = false

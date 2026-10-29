@@ -800,19 +800,45 @@ class RunnerTests: XCTestCase {
         XCTAssertEqual([exact.width, exact.height], [600, 1024])
     }
 
-    /// 无参数；浮标与失败气泡放在锚点下方 8pt，下方放不下放上方 8pt，左对齐并限制在可用区水平范围内，无返回值（#99）。
+    /// 无参数；浮标与失败气泡放在锚点下方 8pt，下方放不下放上方 8pt，上下都放不下贴可用区域底部，左对齐并限制在可用区域水平范围内，无返回值（#99）。
     func testInputStatusBubbleFrameAvoidsAnchor() {
         let visible = NSRect(x: 0, y: 0, width: 400, height: 300)
         let size = NSSize(width: 120, height: 28)
         // 边界：下方剩余 100pt 足够，紧贴锚点下方 8pt 且与锚点左对齐。
-        XCTAssertEqual(InputStatusBubble.frame(size: size, anchor: NSRect(x: 50, y: 100, width: 80, height: 20), visible: visible),
+        XCTAssertEqual(InputStatusBubble.frame(size: size, anchor: NSRect(x: 50, y: 100, width: 80, height: 20), area: visible),
                        NSRect(x: 50, y: 64, width: 120, height: 28))
         // 边界：锚点底部距可用区底 20pt，放不下 8+28，改放上方 8pt，不压住锚点。
-        XCTAssertEqual(InputStatusBubble.frame(size: size, anchor: NSRect(x: 50, y: 20, width: 80, height: 20), visible: visible),
+        XCTAssertEqual(InputStatusBubble.frame(size: size, anchor: NSRect(x: 50, y: 20, width: 80, height: 20), area: visible),
                        NSRect(x: 50, y: 48, width: 120, height: 28))
         // 边界：锚点靠右，左对齐会越出右边，水平收回到 400-120=280。
-        XCTAssertEqual(InputStatusBubble.frame(size: size, anchor: NSRect(x: 350, y: 100, width: 30, height: 20), visible: visible),
+        XCTAssertEqual(InputStatusBubble.frame(size: size, anchor: NSRect(x: 350, y: 100, width: 30, height: 20), area: visible),
                        NSRect(x: 280, y: 64, width: 120, height: 28))
+        // 边界：区域高 40pt，锚点居中 y=10..30，下方（10-8-28<0）与上方（30+8+28>40）都放不下，贴区域底部 y=0。
+        let short = NSRect(x: 0, y: 0, width: 400, height: 40)
+        XCTAssertEqual(InputStatusBubble.frame(size: size, anchor: NSRect(x: 50, y: 10, width: 80, height: 20), area: short),
+                       NSRect(x: 50, y: 0, width: 120, height: 28))
+        // 边界：区域高度小于气泡（20<28）时 y 取 maxY-height=-8，保证不超出区域顶部。
+        let tiny = NSRect(x: 0, y: 0, width: 400, height: 20)
+        XCTAssertEqual(InputStatusBubble.frame(size: size, anchor: NSRect(x: 50, y: 5, width: 80, height: 10), area: tiny),
+                       NSRect(x: 50, y: -8, width: 120, height: 28))
+    }
+
+    /// 无参数；可用区域为屏幕可见区与来源窗口的交集，窗口使气泡水平夹在窗口内，无窗口或交集为空时用可见区，无返回值（#99）。
+    func testInputStatusBubbleAvailableAreaClipsToWindow() {
+        let visible = NSRect(x: 0, y: 0, width: 400, height: 300)
+        let size = NSSize(width: 120, height: 28)
+        // 边界：窗口 x=100..300，锚点 x=280 左对齐会越出窗口右边，夹到 300-120=180；锚点 x=20 在窗口左侧，夹到 100。
+        let window = NSRect(x: 100, y: 50, width: 200, height: 200)
+        let area = InputStatusBubble.availableArea(visible: visible, window: window)
+        XCTAssertEqual(area, window)
+        XCTAssertEqual(InputStatusBubble.frame(size: size, anchor: NSRect(x: 280, y: 150, width: 10, height: 20), area: area).minX, 180)
+        XCTAssertEqual(InputStatusBubble.frame(size: size, anchor: NSRect(x: 20, y: 150, width: 10, height: 20), area: area).minX, 100)
+        // 边界：窗口部分伸出可见区时取交集（x=350..400）。
+        XCTAssertEqual(InputStatusBubble.availableArea(visible: visible, window: NSRect(x: 350, y: 0, width: 200, height: 100)),
+                       NSRect(x: 350, y: 0, width: 50, height: 100))
+        // 边界：无窗口、或窗口与可见区完全不相交，都用可见区。
+        XCTAssertEqual(InputStatusBubble.availableArea(visible: visible, window: nil), visible)
+        XCTAssertEqual(InputStatusBubble.availableArea(visible: visible, window: NSRect(x: 900, y: 0, width: 50, height: 50)), visible)
     }
 
     /// 无参数；进行中浮标高固定 24pt，宽为 10+12+6+文字宽+10 并向上取整，无返回值（#67）。

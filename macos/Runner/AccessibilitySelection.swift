@@ -4,6 +4,12 @@ import Carbon
 import Darwin
 import Foundation
 
+/// 输入翻译浮标与失败气泡的定位依据（AppKit 全局坐标）：selection 为锚点矩形，window 为来源应用焦点窗口矩形，取不到为 nil。
+struct InputAnchor: Equatable {
+    let selection: NSRect
+    let window: NSRect?
+}
+
 /// 从前台应用读取当前选区。翻译业务在 Dart。
 enum AccessibilitySelection {
     /// prompt决定是否显示辅助功能授权提示；返回当前进程是否获得系统信任。
@@ -282,33 +288,52 @@ enum AccessibilitySelection {
         return nil
     }
 
-    /// sourcePID 为输入翻译的来源进程；返回失败气泡锚点（AppKit 全局坐标）：依次为选中文字矩形、焦点元素矩形，
-    /// 都取不到时为当前鼠标位置的 1×1 矩形（#99）。部分自绘或 Electron 应用不提供文字矩形，此时退到下一级。
-    static func inputAnchor(sourcePID: pid_t) -> NSRect {
-        if let focused = focusedElement(from: AXUIElementCreateApplication(sourcePID)) {
-            // 选中文字矩形：先取选区范围，再按范围取屏幕矩形（左上原点的全局坐标）。
-            var range: CFTypeRef?
+    /// sourcePID 为输入翻译的来源进程，selectionElement 为读取原文时持有选区的 AX 节点（可能不是焦点元素，如 Electron 只读回复）；
+    /// 返回浮标与失败气泡的锚点（AppKit 全局坐标）：selection 依次取选区节点的文本标记范围矩形、字符范围矩形、节点自身矩形，
+    /// 再退到焦点元素矩形，都取不到时为当前鼠标位置的 1×1 矩形（#99）；window 为来源应用焦点窗口矩形，取不到为 nil。
+    static func inputAnchor(sourcePID: pid_t, selectionElement: AXUIElement?) -> InputAnchor {
+        let app = AXUIElementCreateApplication(sourcePID)
+        // 来源应用当前窗口矩形，用于把气泡限制在该窗口内。
+        let window = axElement(attribute(app, kAXFocusedWindowAttribute as CFString)).flatMap(elementRect)
+        // 选区节点：文本范围矩形优先，其次节点自身矩形；读取走复制兜底而不知道选区节点时，按焦点元素持有选区处理。
+        // 选区节点都取不到时，焦点元素再提供自身矩形。
+        let focused = focusedElement(from: app)
+        let selection = (selectionElement ?? focused).flatMap { textRangeRect(of: $0) ?? elementRect($0) }
+            ?? focused.flatMap(elementRect)
+        if let selection { return InputAnchor(selection: selection, window: window) }
+        let mouse = NSEvent.mouseLocation
+        return InputAnchor(selection: NSRect(x: mouse.x, y: mouse.y, width: 1, height: 1), window: window)
+    }
+
+    /// element 为持有选区的 AX 节点；先按文本标记范围、再按字符范围取选中文字的屏幕矩形（AppKit 全局坐标），
+    /// 两者都失败或矩形为空时返回 nil。Electron/WebKit 只读文本通常只提供文本标记范围。
+    private static func textRangeRect(of element: AXUIElement) -> NSRect? {
+        let candidates: [(range: CFString, bounds: CFString)] = [
+            (AppConstants.axSelectedTextMarkerRangeAttribute as CFString, AppConstants.axBoundsForTextMarkerRangeAttribute as CFString),
+            (kAXSelectedTextRangeAttribute as CFString, kAXBoundsForRangeParameterizedAttribute as CFString),
+        ]
+        for candidate in candidates {
             var bounds: CFTypeRef?
-            if AXUIElementCopyAttributeValue(focused, kAXSelectedTextRangeAttribute as CFString, &range) == .success,
-               let range,
-               AXUIElementCopyParameterizedAttributeValue(
-                   focused, kAXBoundsForRangeParameterizedAttribute as CFString, range, &bounds) == .success,
+            // 先取选区范围，再按范围取屏幕矩形（左上原点的全局坐标）。
+            if let range = attribute(element, candidate.range),
+               AXUIElementCopyParameterizedAttributeValue(element, candidate.bounds, range, &bounds) == .success,
                let rect = axRect(bounds), !rect.isEmpty {
                 return appKitRect(rect)
             }
-            // 焦点元素矩形：输入框整体位置与尺寸。
-            var position = CGPoint.zero
-            var size = CGSize.zero
-            if let value = attribute(focused, kAXPositionAttribute as CFString),
-               AXValueGetValue(value as! AXValue, .cgPoint, &position),
-               let value = attribute(focused, kAXSizeAttribute as CFString),
-               AXValueGetValue(value as! AXValue, .cgSize, &size),
-               size.width > 0, size.height > 0 {
-                return appKitRect(CGRect(origin: position, size: size))
-            }
         }
-        let mouse = NSEvent.mouseLocation
-        return NSRect(x: mouse.x, y: mouse.y, width: 1, height: 1)
+        return nil
+    }
+
+    /// element 为 AX 节点；按 AXPosition 与 AXSize 返回其屏幕矩形（AppKit 全局坐标），缺失或尺寸为空时返回 nil。
+    private static func elementRect(_ element: AXUIElement) -> NSRect? {
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        guard let positionValue = attribute(element, kAXPositionAttribute as CFString),
+              AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
+              let sizeValue = attribute(element, kAXSizeAttribute as CFString),
+              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size),
+              size.width > 0, size.height > 0 else { return nil }
+        return appKitRect(CGRect(origin: position, size: size))
     }
 
     /// value 为 AX 返回的矩形值；返回其中的 CGRect，类型不符时返回 nil。
