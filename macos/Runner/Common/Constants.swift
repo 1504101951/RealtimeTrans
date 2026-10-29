@@ -164,6 +164,8 @@ enum AppConstants {
     static let appReadyMethod = "appReady"
     /// appStartFailed 协议值；主 Dart 引擎初始化失败时发送错误文本，原生提示后退出（#126），与Dart常量同步。
     static let appStartFailedMethod = "appStartFailed"
+    /// perfMark 协议值；Dart 交来阶段名与毫秒数，原生写入性能日志（#68「性能测量边界」），与Dart常量同步。
+    static let perfMarkMethod = "perfMark"
     static let appearanceChangedMethod = "appearanceChanged"
     static let applicationSupportPathMethod = "applicationSupportPath"
     /// 贴纸库协议值（#103），与Dart常量同步：选择并规范化图片、写入贴纸文件、删除贴纸文件。

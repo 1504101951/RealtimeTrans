@@ -95,8 +95,15 @@ enum ScreenCaptureService {
                 userInfo: [NSLocalizedDescriptionKey: displayUnreadableMessage]
             )
         }
+        // 取帧、PNG 编码与前台窗口建议选区分别计时（#68「性能测量边界」）。
+        let captureStart = ContinuousClock.now
         let (image, scale) = try await captureDisplayImage(displayID: screenNumber, showsCursor: showsCursor)
+        PerformanceLog.record("screenshot-capture-image", since: captureStart)
+        let encodeStart = ContinuousClock.now
         let png = try PNGEncoding.data(image, scale: scale)
+        PerformanceLog.record("screenshot-png-encode", since: encodeStart)
+        let cropStart = ContinuousClock.now
+        defer { PerformanceLog.record("screenshot-window-crop", since: cropStart) }
         return FreezeFrame(
             displayID: screenNumber,
             scale: scale,

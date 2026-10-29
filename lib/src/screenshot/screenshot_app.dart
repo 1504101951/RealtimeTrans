@@ -369,6 +369,11 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
   /// value 为原生截图快照；替换图片并清空上一张草稿，无返回值。
   void _replace(Map<Object?, Object?> value) {
     if (!mounted) return;
+    // 从收到快照到新画面首帧完成的耗时（#68「性能测量边界」）。
+    final firstFrame = Stopwatch()..start();
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => unawaited(_perfMark('screenshot-dart-first-frame', firstFrame)),
+    );
     _expandedRow = null;
     // 每次截图默认不美化、比例自由。
     _beautify = null;
@@ -452,9 +457,12 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
 
   /// bytes为原图PNG、id为捕获身份；异步解码只更新同一会话的马赛克预览。
   Future<void> _loadSourceImage(Uint8List bytes, Object? id) async {
+    // 原图解码计时（#68「性能测量边界」）。
+    final watch = Stopwatch()..start();
     final codec = await ui.instantiateImageCodec(bytes);
     final frame = await codec.getNextFrame();
     codec.dispose();
+    unawaited(_perfMark('screenshot-dart-decode', watch));
     if (!mounted || _capture['id'] != id) {
       frame.image.dispose();
       return;
@@ -464,6 +472,13 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       _sourceImage = frame.image;
     });
   }
+
+  /// stage 为固定阶段名，watch 为该阶段的计时器；把毫秒耗时交给原生性能日志，返回发送完成的 Future（#68）。
+  Future<void> _perfMark(String stage, Stopwatch watch) =>
+      widget.channel.invokeMethod<void>(MethodNames.perfMark, {
+        'stage': stage,
+        'ms': watch.elapsedMicroseconds / 1000,
+      });
 
   /// 返回当前被选中的标注；文字与非文字分别保留各自交互状态。
   EditAnnotation? get _styleSelection => _document.annotations
@@ -995,10 +1010,12 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     String? saved;
     try {
       // 复制与保存输出美化图；贴图沿用原图，不在屏幕上钉出背景。
+      final render = Stopwatch()..start();
       final bytes = await _document.renderPng(
         beautify: action == 'pin' ? null : _beautify,
         unit: _pixelRatio,
       );
+      unawaited(_perfMark('export-render-png', render));
       if (!mounted || _capture['id'] != id) return;
       if (action == 'save' || action == 'copySave') {
         saved = await widget.channel.invokeMethod<String>(

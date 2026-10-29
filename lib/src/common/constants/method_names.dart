@@ -56,6 +56,9 @@ abstract final class MethodNames {
   /// 主引擎初始化失败；参数 message 为错误文本，原生弹出提示后退出（#126）。
   static const appStartFailed = 'appStartFailed';
 
+  /// 阶段耗时；参数 stage 为固定阶段名、ms 为毫秒数，原生写入性能日志（#68「性能测量边界」）。
+  static const perfMark = 'perfMark';
+
   static const appearanceChanged = 'appearanceChanged';
 
   static const applicationSupportPath = 'applicationSupportPath';

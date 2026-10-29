@@ -551,6 +551,10 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
                 pendingAppReady = true
             }
             result(nil)
+        case AppConstants.perfMarkMethod:
+            // Dart 主引擎的阶段耗时写入同一性能日志。
+            PerformanceLog.note(args["stage"] as! String, milliseconds: (args["ms"] as! NSNumber).doubleValue)
+            result(nil)
         case AppConstants.appStartFailedMethod:
             result(nil)
             // 菜单栏应用默认不在前台；先激活，提示才不会被其他应用窗口挡住（#126）。

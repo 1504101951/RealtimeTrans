@@ -150,6 +150,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         if window?.isVisible == true {
             window?.orderOut(nil)
         }
+        let captureStart = ContinuousClock.now
         captureTask = Task { @MainActor in
             defer {
                 self.capturing = false
@@ -187,7 +188,11 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
                 self.initialCrop = selection.crop
                 self.initialCropSelected = selection.selected
                 self.message = nil
+                // 显示冻结画面与发送快照的同步耗时，以及从请求截图到显示的总耗时（#68）。
+                let showStart = ContinuousClock.now
                 self.show(compact: false)
+                PerformanceLog.record("screenshot-show-sync", since: showStart)
+                PerformanceLog.record("screenshot-to-show", since: captureStart)
             } catch is CancellationError {
                 return
             } catch {
@@ -411,6 +416,10 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             Self.brushCursor(diameter: CGFloat(diameter), argb: (args["color"] as? NSNumber)?.uint32Value).set()
             hasNativeCursor = true
             result(nil)
+        case AppConstants.perfMarkMethod:
+            // 截图引擎的阶段耗时写入同一性能日志（#68）。
+            PerformanceLog.note(args["stage"] as! String, milliseconds: (args["ms"] as! NSNumber).doubleValue)
+            result(nil)
         case AppConstants.openStickerSettingsMethod:
             // 「管理贴纸…」打开设置窗口（#103）。
             MainActor.assumeIsolated { StatusBarController.shared.showSettings?() }
@@ -542,8 +551,10 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
                 return
             }
             let payload = typed.data
+            let exportStart = ContinuousClock.now
             switch call.method {
             case AppConstants.copyScreenshotMethod:
+                defer { PerformanceLog.record("export-copy", since: exportStart) }
                 let item = NSPasteboardItem()
                 item.setData(payload, forType: .png)
                 pasteboard.clearContents()
@@ -553,6 +564,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
                 }
                 result(nil)
             case AppConstants.saveScreenshotMethod:
+                defer { PerformanceLog.record("export-save", since: exportStart) }
                 let name = args["name"] as? String ?? "screenshot.png"
                 do {
                     // datedDirectory统一默认路径；save独占创建，重名只增加序号。

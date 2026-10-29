@@ -35,10 +35,14 @@ class AppDelegate: FlutterAppDelegate {
     private let selectionMonitor = SelectionMonitor()
 
     override func applicationDidFinishLaunching(_ notification: Notification) {
+        // 启动耗时：主引擎运行与整个启动回调分别记录（#68「性能测量边界」）。
+        let launchStart = ContinuousClock.now
+        defer { PerformanceLog.record("launch-finish", since: launchStart) }
         let flutter = FlutterViewController()
         flutterViewController = flutter
         _ = flutter.view
         _ = flutter.engine.run(withEntrypoint: nil)
+        PerformanceLog.record("launch-engine-run", since: launchStart)
         RegisterGeneratedPlugins(registry: flutter)
         // 平台视图工厂按引擎注册，避免独立窗口缺少原生玻璃材料。
         NativeGlassFactory.register(with: flutter)

@@ -17,6 +17,22 @@ enum CaptureStartupLog {
     }
 }
 
+/// 启动、截图与导出的耗时日志（#68「性能测量边界」）；只写固定阶段名与毫秒数，不含图像、文字、标题或路径。
+enum PerformanceLog {
+    private static let logger = Logger(subsystem: "TranslateApp", category: "Performance")
+
+    /// stage 为固定阶段名，start 为该阶段的单调时钟起点；向系统日志写入毫秒耗时，无返回值。
+    static func record(_ stage: String, since start: ContinuousClock.Instant) {
+        let duration = start.duration(to: .now).components
+        note(stage, milliseconds: Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1_000_000_000_000_000)
+    }
+
+    /// stage 为固定阶段名，milliseconds 为已测得的耗时（Dart 经 perfMark 交来）；写入系统日志，无返回值。
+    static func note(_ stage: String, milliseconds: Double) {
+        logger.notice("stage=\(stage, privacy: .public) duration_ms=\(milliseconds, privacy: .public)")
+    }
+}
+
 /// 实时翻译的排查日志。只写数量与耗时，不写屏幕文字或译文。
 enum LiveRegionLog {
     private static let logger = Logger(subsystem: "TranslateApp", category: "LiveRegion")

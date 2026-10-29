@@ -43,11 +43,17 @@ Future<void> main() async {
 
 /// bridge 为主引擎平台桥；装配主引擎唯一的配置、翻译会话、历史存储与跨窗口请求入口，返回装配完成的 Future。
 Future<void> _startApplication(MacosPlatformBridge bridge) async {
+  // 启动各阶段计时：读取设置、打开数据库、应用系统配置与整体就绪（#68「性能测量边界」）。
+  final total = Stopwatch()..start();
+  final stage = Stopwatch()..start();
   final initial = AppSettings.fromMap(await bridge.loadSettings());
+  unawaited(bridge.perfMark('launch-dart-settings', stage));
+  stage.reset();
   final support = await bridge.applicationSupportPath();
   Directory(support).createSync(recursive: true);
   // 翻译历史与生词本共用同一个 SQLite 文件。
   final database = sqlite3.open('$support/translation_history.sqlite');
+  unawaited(bridge.perfMark('launch-dart-database', stage));
   final history = TranslationHistoryStore(
     database,
     onChanged: () => unawaited(bridge.notifyHistoryChanged()),
@@ -203,12 +209,14 @@ Future<void> _startApplication(MacosPlatformBridge bridge) async {
     }
   });
 
+  stage.reset();
   try {
     // applySettings应用已保存的系统配置；启动失败仍保留设置入口供用户修正。
     await bridge.applySettings(initial.toMap());
   } on PlatformException catch (error) {
     settings.error = error.message;
   }
+  unawaited(bridge.perfMark('launch-dart-apply', stage));
   runApp(
     TranslateApp(
       bridge: bridge,
@@ -219,6 +227,7 @@ Future<void> _startApplication(MacosPlatformBridge bridge) async {
   );
   // appReady通知原生主界面已能接收请求与首次启动窗口调度。
   await bridge.appReady();
+  unawaited(bridge.perfMark('launch-dart-ready', total));
 }
 
 /// 无参数；设置引擎入口只创建表单，不创建监听器或翻译会话；返回就绪确认完成的 Future。
