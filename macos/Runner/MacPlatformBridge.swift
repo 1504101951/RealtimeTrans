@@ -49,7 +49,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
         }
     }
     private var pendingAppReady = false
-    /// 当前输入翻译会话的失败气泡锚点（AppKit 全局坐标），非输入翻译会话为 nil（#99）。
+    /// 当前输入翻译会话的浮标与失败气泡锚点（AppKit 全局坐标），非输入翻译会话为 nil（#99）。
     private var inputAnchor: NSRect?
     var closePermissionWizard: (() -> Void)?
     var shortcutRecorder: ((UInt32, UInt32) -> Void)?
@@ -161,6 +161,8 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             sourceProcessIdentifier = nil
             retainsResult = false
             overlay.hide(sessionId: sessionId)
+            // Dart 结束输入翻译会话：收起进行中浮标；失败气泡由自身计时关闭（#67）。
+            MainActor.assumeIsolated { InputStatusBubble.shared.closeProgress() }
             result(nil)
         case AppConstants.setOverlaySizeMethod:
             guard let sessionId = args["sessionId"] as? String,
@@ -209,6 +211,8 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
                 result("来源应用已切换，未替换原文。"); return
             }
             guard !IsSecureEventInputEnabled() else { result("安全输入已开启，未替换原文。"); return }
+            // 通过校验即将粘贴：收起进行中浮标，避免遮挡或在粘贴后才迟到出现（#67）。
+            MainActor.assumeIsolated { InputStatusBubble.shared.closeProgress() }
             Task { @MainActor in
                 // pasteReplacingSelection 经剪贴板粘贴，并在来源应用读取后还原原剪贴板。
                 let pasted = await AccessibilitySelection.pasteReplacingSelection(text, pasteboard: .general, paste: AccessibilitySelection.postPasteKey)
@@ -220,7 +224,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             }
             // 只为仍属于当前输入翻译的会话显示；锚点在读取完成时取得（#99）。
             if currentSessionId == sessionId, let inputAnchor {
-                MainActor.assumeIsolated { InputFailureBubble.shared.show(message, anchor: inputAnchor) }
+                MainActor.assumeIsolated { InputStatusBubble.shared.showFailure(message, anchor: inputAnchor) }
             }
             result(nil)
         case AppConstants.isCurrentScreenshotMethod:
@@ -725,6 +729,10 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
         sourceProcessIdentifier = sourcePID
         // 输入翻译失败气泡的锚点属于本会话；其他手势为 nil（#99）。
         self.inputAnchor = inputAnchor
+        // 输入翻译读取完成后 300ms 仍未结束才显示进行中浮标；会话结束、替换或失败会取消或收起它（#67）。
+        if let inputAnchor {
+            MainActor.assumeIsolated { InputStatusBubble.shared.showProgress(anchor: inputAnchor) }
+        }
         emit([
             "type": AppConstants.selectionCapturedEvent,
             "sessionId": sessionId,
@@ -747,6 +755,8 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
     /// eventType 为失效或 Escape 类型；被动失效只关闭按钮，Escape 关闭所有状态，无返回值。
     func invalidateSelection(eventType: String = AppConstants.selectionInvalidatedEvent) {
         guard !retainsResult || eventType == AppConstants.escapePressedMethod else { return }
+        // 会话失效或被新会话替换：取消或收起进行中浮标，失败气泡保留（#67）。
+        MainActor.assumeIsolated { InputStatusBubble.shared.closeProgress() }
         selectionReadTask?.cancel()
         selectionReadTask = nil
         guard let sessionId = currentSessionId else { return }

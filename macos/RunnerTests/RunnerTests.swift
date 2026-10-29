@@ -800,19 +800,25 @@ class RunnerTests: XCTestCase {
         XCTAssertEqual([exact.width, exact.height], [600, 1024])
     }
 
-    /// 无参数；失败气泡放在锚点下方 8pt，下方放不下放上方 8pt，左对齐并限制在可用区水平范围内，无返回值（#99）。
-    func testInputFailureBubbleFrameAvoidsAnchor() {
+    /// 无参数；浮标与失败气泡放在锚点下方 8pt，下方放不下放上方 8pt，左对齐并限制在可用区水平范围内，无返回值（#99）。
+    func testInputStatusBubbleFrameAvoidsAnchor() {
         let visible = NSRect(x: 0, y: 0, width: 400, height: 300)
         let size = NSSize(width: 120, height: 28)
         // 边界：下方剩余 100pt 足够，紧贴锚点下方 8pt 且与锚点左对齐。
-        XCTAssertEqual(InputFailureBubble.frame(size: size, anchor: NSRect(x: 50, y: 100, width: 80, height: 20), visible: visible),
+        XCTAssertEqual(InputStatusBubble.frame(size: size, anchor: NSRect(x: 50, y: 100, width: 80, height: 20), visible: visible),
                        NSRect(x: 50, y: 64, width: 120, height: 28))
         // 边界：锚点底部距可用区底 20pt，放不下 8+28，改放上方 8pt，不压住锚点。
-        XCTAssertEqual(InputFailureBubble.frame(size: size, anchor: NSRect(x: 50, y: 20, width: 80, height: 20), visible: visible),
+        XCTAssertEqual(InputStatusBubble.frame(size: size, anchor: NSRect(x: 50, y: 20, width: 80, height: 20), visible: visible),
                        NSRect(x: 50, y: 48, width: 120, height: 28))
         // 边界：锚点靠右，左对齐会越出右边，水平收回到 400-120=280。
-        XCTAssertEqual(InputFailureBubble.frame(size: size, anchor: NSRect(x: 350, y: 100, width: 30, height: 20), visible: visible),
+        XCTAssertEqual(InputStatusBubble.frame(size: size, anchor: NSRect(x: 350, y: 100, width: 30, height: 20), visible: visible),
                        NSRect(x: 280, y: 64, width: 120, height: 28))
+    }
+
+    /// 无参数；进行中浮标高固定 24pt，宽为 10+12+6+文字宽+10 并向上取整，无返回值（#67）。
+    func testInputProgressSizeWrapsText() {
+        // 边界：文字宽 39.4pt 时内容 77.4pt，向上取整为 78pt；高度不随文字变化。
+        XCTAssertEqual(InputStatusBubble.progressSize(textWidth: 39.4), NSSize(width: 78, height: 24))
     }
 
     /// 无参数；从实际应用PID生成并编解码原生事件，验证来源不是Dart测试手工补入的值。

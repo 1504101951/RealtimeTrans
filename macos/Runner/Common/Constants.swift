@@ -248,6 +248,15 @@ enum AppConstants {
     /// 输入翻译失败气泡的显示时长（毫秒）与距锚点的间距（#99）。
     static let inputFailureDurationMs = 2500
     static let inputFailureGap: CGFloat = 8
+    /// 输入翻译进行中浮标（#67）：读取原文后等待的毫秒数、文案、字号、高度、圆角、水平内边距、转圈边长与转圈到文字的间距。
+    static let inputProgressDelayMs = 300
+    static let inputProgressText = "翻译中…"
+    static let inputProgressFontSize: CGFloat = 13
+    static let inputProgressHeight: CGFloat = 24
+    static let inputProgressRadius: CGFloat = 12
+    static let inputProgressPaddingX: CGFloat = 10
+    static let inputProgressSpinnerSize: CGFloat = 12
+    static let inputProgressSpacing: CGFloat = 6
     /// 输入翻译粘贴后等待来源应用读取剪贴板的时长，之后才还原原剪贴板（#99）。
     static let pasteRestoreDelay = Duration.milliseconds(500)
     static let revealFileMethod = "revealFile"

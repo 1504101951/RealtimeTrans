@@ -145,20 +145,92 @@ final class OverlayHostViewController: NSViewController {
     }
 }
 
-/// 输入翻译失败气泡：非激活玻璃提示，显示在选中区域附近，不抢焦点，样式与长截图提示相同（#99）。
+/// 输入翻译状态浮标：进行中浮标与失败气泡共用一个非激活玻璃面板，显示在选中区域附近，不抢焦点（#67、#99）。
 @MainActor
-final class InputFailureBubble {
-    static let shared = InputFailureBubble()
+final class InputStatusBubble {
+    static let shared = InputStatusBubble()
+
+    /// 当前显示内容的种类；会话结束只收起进行中浮标，不能带走刚显示的失败气泡。
+    private enum Kind { case progress, failure }
+
     private var panel: NSPanel?
+    private var kind: Kind?
+    /// 每次显示、关闭或重新计时都递增，使旧计时（浮标延迟、失败气泡到时）失效，不影响新内容。
     private var generation = 0
 
-    /// message 为失败原因，anchor 为选中区域（AppKit 全局坐标）；替换旧气泡，到时或点击后关闭，无返回值。
-    func show(_ message: String, anchor: NSRect) {
+    /// anchor 为选中区域（AppKit 全局坐标）；等待 inputProgressDelayMs 后仍未被收起才显示「翻译中…」浮标，忽略鼠标事件，无返回值。
+    func showProgress(anchor: NSRect) {
+        close()
+        let current = generation
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(AppConstants.inputProgressDelayMs))
+            guard let self, self.generation == current else { return }
+            let label = NSTextField(labelWithString: AppConstants.inputProgressText)
+            label.font = .systemFont(ofSize: AppConstants.inputProgressFontSize)
+            label.textColor = .labelColor
+            label.lineBreakMode = .byClipping
+            label.sizeToFit()
+            let size = Self.progressSize(textWidth: label.frame.width)
+            let spinner = NSProgressIndicator()
+            spinner.style = .spinning
+            spinner.controlSize = .small
+            spinner.isIndeterminate = true
+            let spinnerSize = AppConstants.inputProgressSpinnerSize
+            spinner.frame = NSRect(x: AppConstants.inputProgressPaddingX, y: ((size.height - spinnerSize) / 2).rounded(),
+                                   width: spinnerSize, height: spinnerSize)
+            spinner.startAnimation(nil)
+            label.frame.origin = NSPoint(x: spinner.frame.maxX + AppConstants.inputProgressSpacing,
+                                         y: ((size.height - label.frame.height) / 2).rounded())
+            let content = NSView(frame: NSRect(origin: .zero, size: size))
+            content.addSubview(spinner)
+            content.addSubview(label)
+            // 浮标只提示进度，不抢焦点也不播报；失败结果由失败气泡播报。
+            self.present(content: content, size: size, anchor: anchor, kind: .progress, ignoresMouse: true)
+        }
+    }
+
+    /// message 为失败原因，anchor 为选中区域（AppKit 全局坐标）；先收起进行中浮标并替换旧气泡，到时或点击后关闭，无返回值。
+    func showFailure(_ message: String, anchor: NSRect) {
         close()
         let padding = AppConstants.scrollHintPadding
         // hintTextSize/hintText 与长截图提示共用文字排版：13/18、最大宽 240pt 换行。
         let textSize = CaptureShadeView.hintTextSize(message, width: AppConstants.scrollHintMaxWidth - padding.width * 2)
         let size = NSSize(width: textSize.width + padding.width * 2, height: textSize.height + padding.height * 2)
+        let label = NSTextField(wrappingLabelWithString: message)
+        label.attributedStringValue = CaptureShadeView.hintText(message, isError: true)
+        label.frame = NSRect(origin: NSPoint(x: padding.width, y: padding.height), size: textSize)
+        let content = BubbleClickView(frame: NSRect(origin: .zero, size: size))
+        content.onClick = { [weak self] in self?.close() }
+        content.addSubview(label)
+        let glass = present(content: content, size: size, anchor: anchor, kind: .failure, ignoresMouse: false)
+        NSAccessibility.post(element: glass, notification: .announcementRequested,
+                             userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+        let current = generation
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(AppConstants.inputFailureDurationMs))
+            guard let self, self.generation == current else { return }
+            self.close()
+        }
+    }
+
+    /// 无参数；关闭当前浮标或气泡并取消尚未到点的浮标，没有内容时保持原状，无返回值。
+    func close() {
+        generation += 1
+        panel?.orderOut(nil)
+        panel = nil
+        kind = nil
+    }
+
+    /// 无参数；会话结束时调用：取消尚未显示的浮标并收起已显示的浮标，失败气泡保持到自己的计时结束，无返回值。
+    func closeProgress() {
+        // 待显示的浮标由 generation 失效；已显示的失败气泡不受影响。
+        if kind == .progress || kind == nil { close() }
+    }
+
+    /// content 为面板内容，size 为内容尺寸，anchor 为选中区域，kind 为内容种类，ignoresMouse 为是否点击穿透；
+    /// 按统一位置规则显示非激活玻璃面板，返回包裹内容的玻璃视图。
+    @discardableResult
+    private func present(content: NSView, size: NSSize, anchor: NSRect, kind: Kind, ignoresMouse: Bool) -> NSGlassEffectView {
         // 锚点所在屏；锚点不在任何屏幕上时按主屏放置。
         let screen = NSScreen.screens.first { $0.frame.intersects(anchor) } ?? NSScreen.screens[0]
         let frame = Self.frame(size: size, anchor: anchor, visible: screen.visibleFrame)
@@ -168,33 +240,22 @@ final class InputFailureBubble {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hidesOnDeactivate = false
-        let label = NSTextField(wrappingLabelWithString: message)
-        label.attributedStringValue = CaptureShadeView.hintText(message, isError: true)
-        label.frame = NSRect(origin: NSPoint(x: padding.width, y: padding.height), size: textSize)
-        let content = BubbleClickView(frame: NSRect(origin: .zero, size: size))
-        content.onClick = { [weak self] in self?.close() }
-        content.addSubview(label)
+        panel.ignoresMouseEvents = ignoresMouse
         let glass = NSGlassEffectView(frame: NSRect(origin: .zero, size: size))
-        glass.cornerRadius = AppConstants.scrollHintRadius
+        glass.cornerRadius = kind == .progress ? AppConstants.inputProgressRadius : AppConstants.scrollHintRadius
         glass.contentView = content
         panel.contentView = glass
         panel.orderFrontRegardless()
         self.panel = panel
-        NSAccessibility.post(element: glass, notification: .announcementRequested,
-                             userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
-        generation += 1
-        let current = generation
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(AppConstants.inputFailureDurationMs))
-            guard let self, self.generation == current else { return }
-            self.close()
-        }
+        self.kind = kind
+        return glass
     }
 
-    /// 无参数；关闭当前气泡，没有气泡时保持原状，无返回值。
-    func close() {
-        panel?.orderOut(nil)
-        panel = nil
+    /// textWidth 为「翻译中…」单行文字宽；返回浮标尺寸：高固定，宽为左右内边距、转圈、间距与文字之和（取整点）。
+    nonisolated static func progressSize(textWidth: CGFloat) -> NSSize {
+        let width = AppConstants.inputProgressPaddingX * 2 + AppConstants.inputProgressSpinnerSize
+            + AppConstants.inputProgressSpacing + textWidth
+        return NSSize(width: width.rounded(.up), height: AppConstants.inputProgressHeight)
     }
 
     /// size 为气泡尺寸，anchor 为选中区域，visible 为锚点所在屏可用区（均为 AppKit 坐标）；
