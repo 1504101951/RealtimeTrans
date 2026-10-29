@@ -138,6 +138,9 @@ abstract final class StickerMetrics {
   /// 贴纸下拉框：分段、网格区、「管理贴纸…」之间的间距。
   static const actionGap = 8.0;
 
+  /// 贴纸下拉框宽度：6 格 40pt 加 5 个 4pt 间距，再加两侧 12pt 内边距，格子保持 40×40pt。
+  static const panelWidth = 284.0;
+
   /// 贴纸下拉框网格区高度（6 行）、表情字号、类别标题字号与上下留白。
   static const gridHeight = 260.0;
   static const emojiFontSize = 24.0;

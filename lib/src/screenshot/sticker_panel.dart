@@ -55,12 +55,11 @@ class _StickerPanelState extends State<StickerPanel> {
   /// 当前分段，默认 Emoji。
   _StickerTab _tab = _StickerTab.emoji;
 
-  /// 6 列、行高 40pt、间距 4pt 的网格布局；Emoji 与我的贴纸共用。
+  /// 6 列、间距 4pt 的正方形网格；下拉框宽度使格子正好 40×40pt，Emoji 与我的贴纸共用。
   static const _gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
     crossAxisCount: StickerMetrics.panelColumns,
     mainAxisSpacing: StickerMetrics.panelGap,
     crossAxisSpacing: StickerMetrics.panelGap,
-    mainAxisExtent: StickerMetrics.panelCell,
   );
 
   /// 无参数；返回 Emoji 段网格：每个类别一个标题加网格，SliverGrid 只构建可见格子（懒加载）。
@@ -136,7 +135,7 @@ class _StickerPanelState extends State<StickerPanel> {
     );
   }
 
-  /// context 为弹窗上下文；返回宽 280pt 的玻璃菜单层：分段、260pt 高网格区，贴纸段另有「管理贴纸…」。
+  /// context 为弹窗上下文；返回宽 284pt 的玻璃菜单层：分段、260pt 高网格区，贴纸段另有「管理贴纸…」。
   @override
   Widget build(BuildContext context) {
     final mine = _tab == _StickerTab.mine;
@@ -146,7 +145,7 @@ class _StickerPanelState extends State<StickerPanel> {
         material: true,
         radius: GlassMetrics.menuRadius,
         child: SizedBox(
-          width: DrawingMetrics.paletteWidth,
+          width: StickerMetrics.panelWidth,
           child: Padding(
             padding: const EdgeInsets.all(DrawingMetrics.padding),
             child: Column(
