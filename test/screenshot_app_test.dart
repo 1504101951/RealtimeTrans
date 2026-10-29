@@ -1147,7 +1147,19 @@ void main() {
     await tester.ensureVisible(find.byKey(const Key('screenshot-beautify')));
     await tester.tap(find.byKey(const Key('screenshot-beautify')));
     await tester.pump();
-    expect(find.byKey(const Key('beautify-row')), findsOneWidget);
+    // 背景与贴纸在同一行（子级行），不另起美化行。
+    final attributesRow = find.byKey(const Key('screenshot-attributes-row'));
+    expect(
+      find.descendant(of: attributesRow, matching: find.byTooltip('背景')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: attributesRow,
+        matching: find.byKey(const Key(ScreenshotActions.sticker)),
+      ),
+      findsOneWidget,
+    );
     // 背景按钮打开通用调色盘（默认渐变页签），选渐变预设「海洋」后应用（#103）。
     await tester.tap(find.byTooltip('背景'));
     await tester.pumpAndSettle();
@@ -1181,7 +1193,7 @@ void main() {
     await tester.ensureVisible(find.byKey(const Key('screenshot-tool-rect')));
     await tester.tap(find.byKey(const Key('screenshot-tool-rect')));
     await tester.pump();
-    expect(find.byKey(const Key('beautify-row')), findsNothing);
+    expect(find.byTooltip('背景'), findsNothing);
     await press('screenshot-pin');
     expect(pinned, isNotNull);
     final pin = await tester.runAsync(() async {

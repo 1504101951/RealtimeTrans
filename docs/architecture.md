@@ -154,7 +154,7 @@ TranslationProgress 只保存已完成分片、配对和上一片双尾；Select
 
 截图美化（#103）由 `BeautifyStyle` 描述（背景为调色盘的 `ColorFill`，纯色或 `FillGradient` 渐变），`paintBeautifyBackdrop` 在内容外画背景并在背景上画阴影、覆盖圆角外四角；编辑器的 `_DimPainter` 以显示坐标调用它预览，`EditDocument.renderPng(beautify:, unit:)` 以像素倍率调用它导出，二者一致。复制与保存传入美化参数，贴图与 OCR 不传。美化参数只属于本次截图，不写偏好。贴纸为 `AnnotationKind.sticker`（`rotation`、`stickerId`），位图由截图页面按需从贴纸目录加载到 `EditDocument.stickerImages`；光标工具经 `box_transform.dart` 命中控制点与旋转手柄并用 `dragBox` 移动、缩放、旋转，拖动结束一次写入撤销历史；美化时贴纸可移到选区外扩内边距的范围，导出在背景合成后画到整幅画布。贴纸面板 `screenshot/sticker_panel.dart`；我的贴纸文件与默认大小由设置页管理，截图快照携带 `stickers` 与 `stickerDirectory`；非激活面板的 Delete 由原生转发为 `deleteScreenshotSelection`。通用调色盘 `ColorPicker`（`screenshot/drawing_controls.dart`）返回 `ColorFill`，绘图工具与美化背景共用；标注样式 `DrawingStyle.gradient` 为空即纯色，`EditDocument` 用 `FillGradient.shader` 按标注外接矩形绘制渐变，绘图偏好在 `color` 外以可选 `gradient` 字段保存。
 
-框选精确控制（#106）的可拖动矩形的命中与变换由 `screenshot/box_transform.dart` 的 `hitBoxHandle`、`dragBox` 完成（控制点为枚举 `BoxHandle`，矩形与旋转角为值对象 `BoxFrame`），裁剪框与文字框只以 `BoxRules` 区分。比例修正由 `common/utils/geometry.dart` 的 `ratioRect` 完成：给定不动的锚点、指针点、宽高比、驱动方向与截图尺寸，返回保持比例、不越界且较短边不小于下限的矩形；新框选、八个控制点、选择比例与 ⌥ 方向键共用它。比例与方向键微调状态只属于 `ScreenshotApp` 本次截图，不写偏好，也不进入 `EditDocument` 撤销历史。工具栏下方展开的行由 `_ExpandedRow`（录制、实时翻译、美化、比例）统一表示，同一时刻最多一行。
+框选精确控制（#106）的可拖动矩形的命中与变换由 `screenshot/box_transform.dart` 的 `hitBoxHandle`、`dragBox` 完成（控制点为枚举 `BoxHandle`，矩形与旋转角为值对象 `BoxFrame`），裁剪框与文字框只以 `BoxRules` 区分。比例修正由 `common/utils/geometry.dart` 的 `ratioRect` 完成：给定不动的锚点、指针点、宽高比、驱动方向与截图尺寸，返回保持比例、不越界且较短边不小于下限的矩形；新框选、八个控制点、选择比例与 ⌥ 方向键共用它。比例与方向键微调状态只属于 `ScreenshotApp` 本次截图，不写偏好，也不进入 `EditDocument` 撤销历史。工具栏下方的展开状态由 `_ExpandedRow`（录制、实时翻译、美化、比例）统一表示，同一时刻最多展开一项；美化设置排在子级行的贴纸之后，不另起一行。
 
 DrawingStyle是标注组合的不可变样式，颜色与线宽控件只返回已确认的值；文档沿用现有命令历史。原生采集在取得前台应用时冻结显示名，不在异步完成后按PID重新查询。
 

@@ -2509,7 +2509,8 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
                           (_capture['displayWidth'] as num).toDouble(),
                           (_capture['displayHeight'] as num).toDouble(),
                         ),
-                  // 第二行是当前父级的子级加上当前工具的属性。
+                  // 第二行是当前父级的子级、当前工具的属性，以及展开时的美化设置：
+                  // 背景按钮 + 内边距与圆角下拉，下拉宽度按 32pt 按钮加 4pt 间距折算格数。
                   secondaryItemCount:
                       _visibleChildren.length +
                       _toolbarActions().keys
@@ -2518,7 +2519,14 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
                                 id != ScreenshotActions.reveal &&
                                 !ScreenshotActions.icons.containsKey(id),
                           )
-                          .length,
+                          .length +
+                      (_beautifyExpanded
+                          ? 1 +
+                                ((BeautifyMetrics.paddingMenuWidth + 4) / 36)
+                                    .ceil() +
+                                ((BeautifyMetrics.radiusMenuWidth + 4) / 36)
+                                    .ceil()
+                          : 0),
                   toolbarItemCount:
                       _toolbar.order
                           .where((id) => !_toolbar.hidden.contains(id))
@@ -2532,16 +2540,10 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
                       : 0,
                   applicationCount: _recordingApplications.length,
                   beautify: _beautify,
-                  // 美化行：背景按钮 + 内边距与圆角下拉，下拉宽度按 32pt 按钮加 4pt 间距折算格数；
                   // 比例行：全部比例预设。
-                  settingsRowItems: switch (_expandedRow) {
-                    _ExpandedRow.beautify =>
-                      1 +
-                          ((BeautifyMetrics.paddingMenuWidth + 4) / 36).ceil() +
-                          ((BeautifyMetrics.radiusMenuWidth + 4) / 36).ceil(),
-                    _ExpandedRow.ratio => CropMetrics.ratios.length,
-                    _ => 0,
-                  },
+                  settingsRowItems: _expandedRow == _ExpandedRow.ratio
+                      ? CropMetrics.ratios.length
+                      : 0,
                   feedbackIsError: _failed,
                   feedback: _message,
                   ocrOverlays: _ocrOverlays,
@@ -2923,8 +2925,13 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     }
 
     // 每组沿工具栏方向独立滚动；动态行数只改变工具栏占位，画布像素不参与布局。
-    Widget row(List<String> ids, String key, {bool loading = false}) =>
-        SingleChildScrollView(
+    // trailing 为排在按钮之后的控件，美化设置借此与贴纸等子级同处一行。
+    Widget row(
+      List<String> ids,
+      String key, {
+      bool loading = false,
+      List<Widget> trailing = const [],
+    }) => SingleChildScrollView(
           key: Key(key),
           scrollDirection: axis,
           child: Flex(
@@ -2933,6 +2940,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
             spacing: 4,
             children: [
               for (final id in ids) button(id),
+              ...trailing,
               if (loading)
                 const SizedBox(
                   width: 32,
@@ -2988,12 +2996,9 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           ),
         );
     final beautify = _beautify;
-    final rows = <Widget>[
-      row(top, 'screenshot-tools-row', loading: _busy),
-      if (attributes.isNotEmpty) row(attributes, 'screenshot-attributes-row'),
-      // 美化行：背景调色盘按钮、内边距与圆角下拉；未开启美化时下拉不可用（#103）。
-      if (_beautifyExpanded)
-        captureRow('beautify-row', [
+    // 美化设置：背景调色盘按钮、内边距与圆角下拉，排在贴纸等子级之后同一行；未开启美化时下拉不可用（#103）。
+    final beautifyControls = <Widget>[
+      if (_beautifyExpanded) ...[
           captureButton(
             '背景',
             beautify == null
@@ -3049,7 +3054,16 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
                     ),
             ),
           ),
-        ]),
+      ],
+    ];
+    final rows = <Widget>[
+      row(top, 'screenshot-tools-row', loading: _busy),
+      if (attributes.isNotEmpty || beautifyControls.isNotEmpty)
+        row(
+          attributes,
+          'screenshot-attributes-row',
+          trailing: beautifyControls,
+        ),
       // 比例行：自由与固定宽高比，锁定后框选与调整保持比例（#106）。
       if (_expandedRow == _ExpandedRow.ratio)
         captureRow('ratio-row', [
