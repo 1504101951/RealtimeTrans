@@ -22,6 +22,8 @@ import 'package:translate_app/src/screenshot/screenshot_app.dart';
 import 'package:translate_app/src/translation/translation_types.dart';
 import 'package:translate_app/src/settings/app_settings.dart';
 
+import 'support/capture_pixels.dart';
+
 /// 无参数；验证文件名、编辑文档像素结果与编辑器导出反馈，无返回值。
 void main() {
   test('截图快捷键独立保存并拒绝与翻译使用同一组合', () {
@@ -53,7 +55,7 @@ void main() {
     // 作用：清空文字后文字框被删除，这一步必须能撤销。
     // 边界：删除三个标注中间的一个，撤销后它回到下标 1 而不是末尾；删除不存在的 id 不产生撤销步骤。
     final document = EditDocument();
-    document.loadCapture(await _pngCheckerboard(), 8, 8);
+    document.loadCapture(await decodePng(await _pngCheckerboard()));
     final ids = [
       for (final text in ['a', 'b', 'c'])
         document.addAnnotation(
@@ -92,7 +94,7 @@ void main() {
     // 左上红、右下蓝的 8x8，便于断言裁剪边界与遮挡覆盖。
     final source = await _pngCheckerboard();
     final document = EditDocument();
-    document.loadCapture(source, 8, 8);
+    document.loadCapture(await decodePng(source));
 
     document.setCrop(const Rect.fromLTWH(0, 0, 4, 4));
     final cropped = await document.renderPng();
@@ -184,7 +186,7 @@ void main() {
 
     // 新捕获清空历史与标注。
     final next = await _solidPng(2, 2, _red);
-    document.loadCapture(next, 2, 2);
+    document.loadCapture(await decodePng(next));
     expect(document.annotations, isEmpty);
     expect(document.canUndo, isFalse);
     expect(document.canRedo, isFalse);
@@ -197,6 +199,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     final bytes = await tester.runAsync(_pngCheckerboard);
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/screenshot');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -210,7 +213,7 @@ void main() {
         case MethodNames.getScreenshot:
           return {
             'id': 'shot',
-            'bytes': bytes,
+            ...capture!,
             'capturedAt': 1788662400000,
             'width': 8,
             'height': 8,
@@ -241,6 +244,8 @@ void main() {
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
 
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('screenshot-canvas')), findsOneWidget);
     // 保存目录在设置中配置，编辑窗不展示路径选择。
@@ -264,6 +269,8 @@ void main() {
 
     // 重新装载会话，验证保存失败时图片仍在，并显示错误。
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     saveError = '目录不可写';
     // toImage/codec 必须在真实异步区完成，否则导出 Future 会挂在 FakeAsync。
@@ -355,6 +362,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(_pngCheckerboard);
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/screenshot-ocr');
     // 原生识别结果含标题与表格，页面应显示排版后的正文。
     const markdown = '# Hello\n\n| World |\n| --- |';
@@ -366,7 +374,7 @@ void main() {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'shot-ocr',
-          'bytes': bytes,
+          ...capture!,
           'capturedAt': 1788662400000,
           'width': 8,
           'height': 8,
@@ -383,6 +391,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pump();
     // _tapExport 启动识别并等待结果弹窗。
     await _tapExport(tester, const Key('screenshot-ocr-copy'));
@@ -428,6 +438,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(_pngCheckerboard);
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/screenshot-codes');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -444,7 +455,7 @@ void main() {
         case MethodNames.getScreenshot:
           return {
             'id': 'shot-codes',
-            'bytes': bytes,
+            ...capture!,
             'capturedAt': 0,
             'width': 8,
             'height': 8,
@@ -459,6 +470,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pump();
     await _tapExport(tester, const Key('screenshot-ocr-copy'));
     expect(find.text('识别结果'), findsOneWidget);
@@ -500,6 +513,8 @@ void main() {
     codes = [];
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pump();
     await _tapExport(tester, const Key('screenshot-ocr-copy'));
     expect(find.text('画面中没有可识别的文字、二维码或条码'), findsOneWidget);
@@ -513,6 +528,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(_pngCheckerboard);
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/screenshot-ocr-overlay');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -521,7 +537,7 @@ void main() {
         case MethodNames.getScreenshot:
           return {
             'id': 'shot-ocr-overlay',
-            'bytes': bytes,
+            ...capture!,
             'capturedAt': 1788662400000,
             'width': 8,
             'height': 8,
@@ -540,6 +556,8 @@ void main() {
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
 
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pump();
     await _tapExport(tester, const Key('screenshot-ocr-translate'));
     expect(find.text('你好'), findsOneWidget);
@@ -554,6 +572,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(_pngCheckerboard);
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/screenshot-ocr-mismatch');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -562,7 +581,7 @@ void main() {
         case MethodNames.getScreenshot:
           return {
             'id': 'shot-ocr-mismatch',
-            'bytes': bytes,
+            ...capture!,
             'capturedAt': 1788662400000,
             'width': 8,
             'height': 8,
@@ -582,6 +601,8 @@ void main() {
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
 
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pump();
     await _tapExport(tester, const Key('screenshot-ocr-translate'));
     expect(find.text(paragraphCountMismatchMessage), findsOneWidget);
@@ -598,13 +619,14 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(_pngCheckerboard);
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/screenshot-ocr-stale');
     const codec = StandardMethodCodec();
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     final snapshot = <String, Object?>{
       'id': 'first',
-      'bytes': bytes,
+      ...capture!,
       'capturedAt': 1788662400000,
       'width': 8,
       'height': 8,
@@ -631,6 +653,8 @@ void main() {
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
 
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pump();
     await tester.ensureVisible(
       find.byKey(const Key('screenshot-ocr-translate')),
@@ -660,7 +684,8 @@ void main() {
       ),
       (_) {},
     );
-    await tester.pump();
+    // 换图后源图重新异步建好，画布才会回来。
+    await awaitCaptureSource(tester);
     reply.complete([
       {'text': 'Hello', 'x': 0, 'y': 0, 'width': 4, 'height': 2},
     ]);
@@ -677,6 +702,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(_pngCheckerboard);
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/screenshot-esc-text');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -686,7 +712,7 @@ void main() {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'shot-esc',
-          'bytes': bytes,
+          ...capture!,
           'capturedAt': 1788662400000,
           'width': 8,
           'height': 8,
@@ -698,6 +724,8 @@ void main() {
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
 
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
@@ -714,7 +742,7 @@ void main() {
   test('文字工具输入后出现在导出文档；画笔不是矩形', () async {
     final source = await _pngCheckerboard();
     final document = EditDocument();
-    document.loadCapture(source, 8, 8);
+    document.loadCapture(await decodePng(source));
     document.setCrop(const Rect.fromLTWH(0, 0, 6, 6));
     document.addAnnotation(
       EditAnnotation(
@@ -763,6 +791,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(() => _solidPng(64, 64, _blue));
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/screenshot-type-path');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -774,7 +803,7 @@ void main() {
         case MethodNames.getScreenshot:
           return {
             'id': 'shot-type-path',
-            'bytes': bytes,
+            ...capture!,
             'capturedAt': 1788662400000,
             'width': 64,
             'height': 64,
@@ -790,6 +819,8 @@ void main() {
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
 
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
     await tester.ensureVisible(find.byKey(const Key('screenshot-tool-text')));
@@ -849,6 +880,7 @@ void main() {
           .writeAsBytesSync(await _solidPng(10, 10, const Color(0xFFFF0000)));
       return _solidPng(64, 64, _blue);
     });
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/screenshot-sticker');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -858,7 +890,7 @@ void main() {
         case MethodNames.getScreenshot:
           return {
             'id': 'shot-sticker',
-            'bytes': bytes,
+            ...capture!,
             'capturedAt': 0,
             'width': 64,
             'height': 64,
@@ -874,6 +906,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
     await tester.ensureVisible(find.byKey(const Key('screenshot-beautify')));
@@ -925,9 +959,7 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
   });
 
-  testWidgets('贴纸面板「Emoji…」：输入框收到的第一个表情成为贴纸并关闭面板（#103）', (
-    tester,
-  ) async {
+  testWidgets('贴纸面板「Emoji…」：输入框收到的第一个表情成为贴纸并关闭面板（#103）', (tester) async {
     // 边界：64×64 蓝图、无我的贴纸；输入两个字符只取第一个字素簇，面板关闭；
     // 测试字体没有表情字形，用测试字体可绘制的「A」代替表情（字形为实心方块）；
     // 默认 96pt 超出 64 像素选区，等比缩小到整图后中心像素不再是蓝色。
@@ -936,6 +968,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(() => _solidPng(64, 64, _blue));
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/screenshot-emoji');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -945,7 +978,7 @@ void main() {
         case MethodNames.getScreenshot:
           return {
             'id': 'shot-emoji',
-            'bytes': bytes,
+            ...capture!,
             'capturedAt': 0,
             'width': 64,
             'height': 64,
@@ -959,6 +992,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
     await tester.ensureVisible(find.byKey(const Key('screenshot-beautify')));
@@ -1002,6 +1037,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(() => _solidPng(64, 64, _blue));
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/screenshot-beautify-none');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -1010,7 +1046,7 @@ void main() {
       (call) async => call.method == MethodNames.getScreenshot
           ? {
               'id': 'shot-none',
-              'bytes': bytes,
+              ...capture!,
               'capturedAt': 0,
               'width': 64,
               'height': 64,
@@ -1019,6 +1055,8 @@ void main() {
     );
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
     await tester.ensureVisible(find.byKey(const Key('screenshot-beautify')));
@@ -1057,6 +1095,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(() => _solidPng(64, 64, _blue));
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     // 主引擎的真实截图历史：内存数据库加临时目录，开启记录。
     final directory = Directory.systemTemp.createTempSync('screenshot-app-');
     addTearDown(() => directory.deleteSync(recursive: true));
@@ -1074,7 +1113,7 @@ void main() {
         case MethodNames.getScreenshot:
           return {
             'id': 'shot-beautify',
-            'bytes': bytes,
+            ...capture!,
             'capturedAt': 1788662400000,
             'width': 64,
             'height': 64,
@@ -1101,6 +1140,8 @@ void main() {
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
 
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
     await tester.ensureVisible(find.byKey(const Key('screenshot-beautify')));
@@ -1162,6 +1203,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(() => _solidPng(64, 64, _blue));
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/screenshot-brush-path');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -1170,7 +1212,7 @@ void main() {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'shot-brush-path',
-          'bytes': bytes,
+          ...capture!,
           'capturedAt': 1788662400000,
           'width': 64,
           'height': 64,
@@ -1185,6 +1227,8 @@ void main() {
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
 
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
     await tester.tap(find.byKey(const Key('screenshot-tool-brush')));
@@ -1251,6 +1295,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(_pngCheckerboard);
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/screenshot-window-crop');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -1259,7 +1304,7 @@ void main() {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'shot-window-crop',
-          'bytes': bytes,
+          ...capture!,
           'capturedAt': 1788662400000,
           'width': 8,
           'height': 8,
@@ -1278,6 +1323,8 @@ void main() {
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
 
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     await _tapExport(tester, const Key('screenshot-copy'));
     expect(copied, isNotNull);
@@ -1294,6 +1341,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(() => _solidPng(64, 64, _blue));
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/screenshot-text-reedit');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -1301,7 +1349,7 @@ void main() {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'shot-text-reedit',
-          'bytes': bytes,
+          ...capture!,
           'capturedAt': 1788662400000,
           'width': 64,
           'height': 64,
@@ -1313,6 +1361,8 @@ void main() {
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
 
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
     await tester.ensureVisible(find.byKey(const Key('screenshot-tool-text')));
@@ -1366,6 +1416,7 @@ Future<void> _tapExport(WidgetTester tester, Key key) async {
   });
   await tester.pumpAndSettle();
 }
+
 
 const _red = Color(0xFFFF0000);
 const _blue = Color(0xFF0000FF);

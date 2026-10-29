@@ -20,6 +20,18 @@ class RunnerTests: XCTestCase {
         return try XCTUnwrap(image.representation(using: .png, properties: [:]))
     }
 
+    /// 尺寸和颜色为测试输入；返回与 ScreenCaptureKit 冻结帧同格式的 BGRA（sRGB、alpha 在前、小端）纯色图像。
+    private func captureImageFixture(width: Int, height: Int, color: NSColor) throws -> CGImage {
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        ))
+        context.setFillColor(color.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        return try XCTUnwrap(context.makeImage())
+    }
+
     /// 无参数；等待正式截图引擎入口确认并显示编辑器，返回可见窗口；六秒覆盖五秒启动预算。
     @MainActor
     private func waitForScreenshotEditor() async throws -> NSWindow {
@@ -75,14 +87,14 @@ class RunnerTests: XCTestCase {
     func testScreenshotPendingStartupCancellationKeepsOnlyLatestDraft() async throws {
         let controller = ScreenshotWindowController(pasteboard: NSPasteboard.withUniqueName())
         defer { controller.shutdown() }
-        let png = try screenshotFixture(width: 80, height: 60, color: .blue)
+        let image = try captureImageFixture(width: 80, height: 60, color: .blue)
         for id in ["cancel-pending", "capture-pending"] {
-            controller.seedCaptureForTesting(png: png, id: id, width: 80, height: 60, showEditor: true)
+            controller.seedCaptureForTesting(image: image, id: id, width: 80, height: 60, showEditor: true)
             if id == "cancel-pending" { controller.cancelCapture() }
             else { controller.closeForCapture() }
             XCTAssertFalse(controller.isCurrentCapture(id))
         }
-        controller.seedCaptureForTesting(png: png, id: "latest", width: 80, height: 60, showEditor: true)
+        controller.seedCaptureForTesting(image: image, id: "latest", width: 80, height: 60, showEditor: true)
         // waitForScreenshotEditor 只等待正式入口确认后的真实窗口。
         _ = try await waitForScreenshotEditor()
         var state: [String: Any]?
@@ -90,7 +102,8 @@ class RunnerTests: XCTestCase {
             state = $0 as? [String: Any]
         }
         XCTAssertEqual(state?["id"] as? String, "latest")
-        XCTAssertEqual((state?["bytes"] as? FlutterStandardTypedData)?.data, png)
+        XCTAssertEqual((state?["pixels"] as? FlutterStandardTypedData)?.data, image.dataProvider?.data as Data?)
+        XCTAssertEqual(state?["rowBytes"] as? Int, image.bytesPerRow)
         XCTAssertEqual(NSApp.windows.filter { $0 is ScreenshotPanel && $0.isVisible }.count, 1)
     }
 
@@ -116,8 +129,8 @@ class RunnerTests: XCTestCase {
     func testScreenshotDiagonalCursorUsesNativeFrameResize() async throws {
         let controller = ScreenshotWindowController(pasteboard: NSPasteboard.withUniqueName())
         defer { controller.shutdown(); NSCursor.arrow.set() }
-        let png = try screenshotFixture(width: 80, height: 60, color: .white)
-        controller.seedCaptureForTesting(png: png, id: "diagonal", width: 80, height: 60, showEditor: true)
+        let image = try captureImageFixture(width: 80, height: 60, color: .white)
+        controller.seedCaptureForTesting(image: image, id: "diagonal", width: 80, height: 60, showEditor: true)
         // waitForScreenshotEditor 等待入口确认，后续事件针对真实可见窗口。
         _ = try await waitForScreenshotEditor()
         // 两个双向轴覆盖四角：左上/右下与右上/左下。检查真实NSCursor状态而非下游调用次数。
@@ -155,8 +168,8 @@ class RunnerTests: XCTestCase {
         ]], forKey: AppConstants.preferencesKey)
         let controller = ScreenshotWindowController(pasteboard: NSPasteboard.withUniqueName())
         defer { controller.shutdown() }
-        let png = try screenshotFixture(width: 80, height: 60, color: .white)
-        controller.seedCaptureForTesting(png: png, id: "shortcut", width: 80, height: 60, showEditor: true)
+        let image = try captureImageFixture(width: 80, height: 60, color: .white)
+        controller.seedCaptureForTesting(image: image, id: "shortcut", width: 80, height: 60, showEditor: true)
         // waitForScreenshotEditor 等待入口确认，后续事件针对真实可见窗口。
         _ = try await waitForScreenshotEditor()
         // 实际UserDefaults到截图快照必须携带工具参数，否则重新截图后用户选择会丢失。
@@ -190,8 +203,8 @@ class RunnerTests: XCTestCase {
     func testScreenshotKeysPreserveTypingAndTextEditing() async throws {
         let controller = ScreenshotWindowController(pasteboard: NSPasteboard.withUniqueName())
         defer { controller.shutdown() }
-        let png = try screenshotFixture(width: 80, height: 60, color: .white)
-        controller.seedCaptureForTesting(png: png, id: "typing", width: 80, height: 60, showEditor: true)
+        let image = try captureImageFixture(width: 80, height: 60, color: .white)
+        controller.seedCaptureForTesting(image: image, id: "typing", width: 80, height: 60, showEditor: true)
         // waitForScreenshotEditor 等待入口确认，后续事件针对真实可见窗口。
         _ = try await waitForScreenshotEditor()
         for repeated in [false, true] {
@@ -289,11 +302,11 @@ class RunnerTests: XCTestCase {
         let board = NSPasteboard.withUniqueName()
         let controller = ScreenshotWindowController(pasteboard: board)
         defer { controller.shutdown(); board.releaseGlobally() }
-        let png = try screenshotFixture(width: 80, height: 60, color: NSColor(deviceRed: 0, green: 0, blue: 1, alpha: 1))
+        let image = try captureImageFixture(width: 80, height: 60, color: NSColor(deviceRed: 0, green: 0, blue: 1, alpha: 1))
         for phase in ["cold", "warm", "reused"] {
             board.clearContents()
             board.setString("unchanged", forType: .string)
-            controller.seedCaptureForTesting(png: png, id: phase, width: 80, height: 60, showEditor: true)
+            controller.seedCaptureForTesting(image: image, id: phase, width: 80, height: 60, showEditor: true)
             // waitForScreenshotEditor 等待入口确认，后续事件针对真实可见窗口。
             _ = try await waitForScreenshotEditor()
             // cold 在入口确认后立即发 Esc；warm 另等待首帧，reused 覆盖同一引擎重开。
@@ -322,12 +335,12 @@ class RunnerTests: XCTestCase {
         let board = NSPasteboard.withUniqueName()
         let controller = ScreenshotWindowController(pasteboard: board)
         defer { controller.shutdown(); board.releaseGlobally() }
-        let png = try screenshotFixture(width: 80, height: 60, color: NSColor(deviceRed: 1, green: 0, blue: 0, alpha: 1))
+        let image = try captureImageFixture(width: 80, height: 60, color: NSColor(deviceRed: 1, green: 0, blue: 0, alpha: 1))
         // 两个硬件键码分别覆盖主 Return 与小键盘 Enter；每次捕获均经过生产 show 初始化。
         for keyCode: UInt16 in [36, 76] {
             let id = "return-\(keyCode)"
             board.clearContents()
-            controller.seedCaptureForTesting(png: png, id: id, width: 80, height: 60, showEditor: true)
+            controller.seedCaptureForTesting(image: image, id: id, width: 80, height: 60, showEditor: true)
             // waitForScreenshotEditor 等待入口确认，后续事件针对真实可见窗口。
             _ = try await waitForScreenshotEditor()
             // 等待真实 Flutter 引擎首帧；这里不以纯 Dart widget 键事件替代原生入口。
@@ -401,10 +414,10 @@ class RunnerTests: XCTestCase {
         XCTAssertTrue(board.setData(clipboardImage, forType: .png))
         XCTAssertTrue(board.setString("clipboard stays unchanged", forType: .string))
         let clipboardChangeCount = board.changeCount
-        let png = try screenshotFixture(width: 80, height: 60, color: NSColor(deviceRed: 1, green: 0, blue: 0, alpha: 1))
+        let image = try captureImageFixture(width: 80, height: 60, color: NSColor(deviceRed: 1, green: 0, blue: 0, alpha: 1))
         let id = "pin-shortcut"
         // seedCaptureForTesting 启动生产截图编辑窗与真实 Dart 引擎，不直接调用贴图或关闭方法。
-        controller.seedCaptureForTesting(png: png, id: id, width: 80, height: 60, showEditor: true)
+        controller.seedCaptureForTesting(image: image, id: id, width: 80, height: 60, showEditor: true)
         // waitForScreenshotEditor 等待入口确认，后续事件针对真实可见窗口。
         _ = try await waitForScreenshotEditor()
         try await Task.sleep(nanoseconds: 1_000_000_000)
@@ -432,7 +445,8 @@ class RunnerTests: XCTestCase {
         // 非正方形尺寸检测裁切与宽高交换；四角及中心检测边界丢失、空白或颜色变化。
         XCTAssertEqual(decoded.pixelsWide, 80)
         XCTAssertEqual(decoded.pixelsHigh, 60)
-        let original = try XCTUnwrap(NSBitmapImageRep(data: png))
+        // 冻结帧为 sRGB BGRA；贴图 PNG 的色彩配置应与源图一致。
+        let original = NSBitmapImageRep(cgImage: image)
         XCTAssertEqual(try XCTUnwrap(decoded.colorSpace.iccProfileData),
                        try XCTUnwrap(original.colorSpace.iccProfileData))
         // PNG 色彩配置保持一致后逐点读取原始通道，避免 NSColor 转换改变采样数值。
@@ -724,9 +738,10 @@ class RunnerTests: XCTestCase {
     }
 
     /// 无参数；两种冻结目标给出的初始选区：指针屏为前台窗口建议且不选中，指定显示器为整屏并选中，无返回值（#105）。
-    func testScreenshotTargetInitialSelection() {
+    func testScreenshotTargetInitialSelection() throws {
         let frame = ScreenCaptureService.FreezeFrame(
-            displayID: 7, scale: 2, png: Data(), pixelWidth: 200, pixelHeight: 100,
+            displayID: 7, scale: 2, image: try captureImageFixture(width: 200, height: 100, color: .white),
+            pixelWidth: 200, pixelHeight: 100,
             displayFrame: NSRect(x: 0, y: 0, width: 100, height: 50),
             windowCrop: NSRect(x: 20, y: 10, width: 40, height: 30)
         )
@@ -1187,7 +1202,7 @@ class RunnerTests: XCTestCase {
         wait(for: [snapshotExpectation], timeout: 1)
         let body = try XCTUnwrap(snapshot)
         XCTAssertNotNil(body["screenAccess"] as? Bool)
-        XCTAssertNil(body["bytes"])
+        XCTAssertNil(body["pixels"])
         XCTAssertNil(body["id"])
     }
 
@@ -1283,8 +1298,8 @@ class RunnerTests: XCTestCase {
         }
 
         // 原图 8×8；合成图 64×16。断言贴图 NSImage 像素尺寸，不依赖窗口 clamp 后的 frame。
-        let originalPng = try png(width: 8, height: 8, color: .red)
-        controller.seedCaptureForTesting(png: originalPng, id: "capture-1", width: 8, height: 8)
+        let original = try captureImageFixture(width: 8, height: 8, color: .red)
+        controller.seedCaptureForTesting(image: original, id: "capture-1", width: 8, height: 8)
         let editedPng = try png(width: 64, height: 16, color: .blue)
 
         var pinResult: Any?

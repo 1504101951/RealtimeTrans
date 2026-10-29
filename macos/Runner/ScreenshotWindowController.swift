@@ -18,6 +18,8 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
     /// 待确认引擎合并重复展示请求；显示模式取最后一次请求，草稿始终读取当前数据。
     private var pendingStartup: WindowEngine.Startup?
     private var pendingCompact = false
+    /// 引擎启动完成后是否展示窗口；预热启动为 false，show 请求置为 true（#68 批次 A）。
+    private var showRequested = false
     private var textInputActive = false
     /// 标记本编辑会话曾设置原生光标，关闭时清除，避免污染其他窗口。
     private var hasNativeCursor = false
@@ -75,7 +77,8 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
 
     private var selectedDisplayID: CGDirectDisplayID = 0
     private var selectedScale: CGFloat = 1
-    private var png: Data?
+    /// 冻结帧源图（BGRA）；冻结视图直接显示，快照以原始字节交给截图引擎（#68 批次 A）。
+    private var image: CGImage?
     private var captureId: String?
     /// 截图已关闭或被替换时回给 Dart 的错误；所有按截图身份校验的方法共用同一文案（#124）。
     private static let staleCaptureFailure = FlutterError(
@@ -108,7 +111,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
     var onCaptureSources: (@MainActor (String?) async throws -> [[String: Any]])?
 
     /// 无参数；返回已完成的冻结帧身份，换帧期间和媒体结果图片均不能发起屏幕采集。
-    var liveCaptureID: String? { !capturing && displaysFrozenScreen && png != nil ? captureId : nil }
+    var liveCaptureID: String? { !capturing && displaysFrozenScreen && image != nil ? captureId : nil }
 
     /// 无参数；在用户选定录制目标后收起冻结编辑层，释放该截图会话，无返回值。
     func closeForCapture() {
@@ -160,7 +163,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             let granted = await ScreenCaptureService.requestAccess()
             guard !Task.isCancelled else { return }
             guard granted else {
-                self.png = nil
+                self.image = nil
                 self.captureId = nil
                 self.initialCrop = nil
                 self.message = AppConstants.screenRecordingRequiredMessage
@@ -180,7 +183,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
                 let selection = target.selection(in: frame)
                 self.selectedDisplayID = frame.displayID
                 self.selectedScale = frame.scale
-                self.png = frame.png
+                self.image = frame.image
                 self.captureId = UUID().uuidString
                 self.capturedAt = Int64(Date().timeIntervalSince1970 * 1000)
                 self.pixels = NSSize(width: frame.pixelWidth, height: frame.pixelHeight)
@@ -197,7 +200,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
-                self.png = nil
+                self.image = nil
                 self.captureId = nil
                 self.initialCrop = nil
                 self.message = error.localizedDescription
@@ -211,6 +214,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         pendingStartup?.cancel()
         pendingStartup = nil
         pendingCompact = false
+        showRequested = false
         captureTask?.cancel()
         previewSource = nil
         // clearTargetPreviews 撤下属于当前草稿的跨屏预览。
@@ -220,7 +224,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         // removeScreenshotKeys 解除草稿关闭后的按键拦截。
         removeScreenshotKeys()
         textInputActive = false
-        png = nil
+        image = nil
         captureId = nil
         message = nil
         initialCrop = nil
@@ -247,11 +251,11 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         captureId == id
     }
 
-    /// 无参数；返回当前截图和保存目录，PNG 以 typed data 下发。
+    /// 无参数；返回当前截图和保存目录，源图以 BGRA 原始字节（pixels、rowBytes）下发。
     private func snapshot() -> [String: Any] {
         var value: [String: Any] = [
             // 展示快照时帧已填充，冻结任务随后结束；原生动作仍通过liveCaptureID拒绝换帧期请求。
-            "canCaptureMedia": displaysFrozenScreen && png != nil,
+            "canCaptureMedia": displaysFrozenScreen && image != nil,
 
             "directory": UserDefaults.standard.string(forKey: AppConstants.screenshotSaveDirectoryKey) ?? "",
             "screenAccess": ScreenCaptureService.isAuthorized(),
@@ -273,9 +277,11 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             value["toolbarSafeHeight"] = screen.visibleFrame.height
         }
         if !displaysFrozenScreen { value["imageScale"] = selectedScale }
-        if let png, let captureId {
+        if let image, let captureId {
             value["id"] = captureId
-            value["bytes"] = FlutterStandardTypedData(bytes: png)
+            // 截图引擎用 decodeImageFromPixels 按 bgra8888 与行字节数建图，不再编解码 PNG。
+            value["pixels"] = FlutterStandardTypedData(bytes: image.dataProvider!.data! as Data)
+            value["rowBytes"] = image.bytesPerRow
         }
         if let initialCrop {
             value["cropX"] = initialCrop.origin.x
@@ -303,10 +309,10 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         channel?.invokeMethod(AppConstants.screenshotToolbarChangedMethod, arguments: toolbarPreferences())
     }
 
-    /// png/id/尺寸为合成捕获；showEditor 为真时启动真实 Flutter 编辑窗，供系统链路测试。
-    func seedCaptureForTesting(png: Data, id: String, width: CGFloat = 1, height: CGFloat = 1, showEditor: Bool = false) {
+    /// image（BGRA）/id/尺寸为合成捕获；showEditor 为真时启动真实 Flutter 编辑窗，供系统链路测试。
+    func seedCaptureForTesting(image: CGImage, id: String, width: CGFloat = 1, height: CGFloat = 1, showEditor: Bool = false) {
         self.displaysFrozenScreen = true
-        self.png = png
+        self.image = image
         self.captureId = id
         self.pixels = NSSize(width: width, height: height)
         self.capturedAt = Int64(Date().timeIntervalSince1970 * 1000)
@@ -445,13 +451,9 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
                 result(Self.staleCaptureFailure)
                 return
             }
-            let payload: Data
-            if let typed = args["bytes"] as? FlutterStandardTypedData {
-                payload = typed.data
-            } else if let png {
-                payload = png
-            } else {
-                result(Self.staleCaptureFailure)
+            // 识别使用截图引擎按当前裁剪与标注合成的 PNG。
+            guard let payload = (args["bytes"] as? FlutterStandardTypedData)?.data else {
+                result(FlutterError(code: AppConstants.badArgsError, message: "缺少识别图片。", details: nil))
                 return
             }
             // recognizeBlocks 是同步的 Vision 调用，放到后台任务执行，识别期间主线程不阻塞（#115）。
@@ -473,13 +475,9 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
                 result(Self.staleCaptureFailure)
                 return
             }
-            let payload: Data
-            if let typed = args["bytes"] as? FlutterStandardTypedData {
-                payload = typed.data
-            } else if let png {
-                payload = png
-            } else {
-                result(Self.staleCaptureFailure)
+            // 识别使用截图引擎按当前裁剪与标注合成的 PNG。
+            guard let payload = (args["bytes"] as? FlutterStandardTypedData)?.data else {
+                result(FlutterError(code: AppConstants.badArgsError, message: "缺少识别图片。", details: nil))
                 return
             }
             // recognizeText 输出 OCR Markdown，detectCodes 输出二维码与条码；Vision 均为异步接口（#108）。
@@ -621,38 +619,9 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         pendingCompact = compact
         let overlay = compact || displaysFrozenScreen
         if engine == nil {
+            showRequested = true
             guard pendingStartup == nil else { return }
-            // WindowEngine 等待 Dart 就绪；启动期间只保留最新展示模式。
-            pendingStartup = WindowEngine.start(
-                name: AppConstants.screenshotEngineName, entrypoint: AppConstants.screenshotEntrypoint,
-                channel: AppConstants.screenshotChannel,
-                handler: { [weak self] call, result in self?.handle(call, result: result) },
-                completion: { [weak self] started in
-                    guard let self else { return }
-                    self.pendingStartup = nil
-                    guard let started else {
-                        // cancelCapture 清空未显示的草稿及采集身份，后续录制与实时翻译不能复用。
-                        self.cancelCapture()
-                        // reportStartFailure 在草稿清理后统一提示截图预览未就绪。
-                        WindowEngine.reportStartFailure("截图预览")
-                        return
-                    }
-                    self.engine = started.engine
-                    self.channel = started.channel
-                    let flutter = started.flutter
-                    flutter.view.wantsLayer = true
-                    flutter.view.layer?.isOpaque = false
-                    flutter.view.layer?.backgroundColor = CGColor.clear
-                    // makeWindow 使用最新模式创建承载当前草稿的窗口。
-                    self.window = self.makeWindow(
-                        content: flutter, overlay: self.pendingCompact || self.displaysFrozenScreen)
-                    self.freezeView.imageScaling = .scaleAxesIndependently
-                    self.freezeView.wantsLayer = true
-                    // 换帧任务仍在读取系统画面时保持隐藏，由该任务完成后展示新草稿。
-                    guard !self.capturing else { return }
-                    // show 重新读取最新截图数据，避免展示启动时的旧草稿。
-                    self.show(compact: self.pendingCompact)
-                })
+            startEngine()
             return
         }
         if let old = window, old.styleMask.contains(.nonactivatingPanel) != overlay {
@@ -680,6 +649,49 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             window?.makeKeyAndOrderFront(nil)
         }
         installScreenshotKeys()
+    }
+
+    /// 无参数；主界面就绪后预热截图引擎与隐藏面板，首次截图直接复用；已启动或启动中时不重复，无返回值（#68 批次 A）。
+    func prewarm() {
+        guard engine == nil, pendingStartup == nil else { return }
+        startEngine()
+    }
+
+    /// 无参数；启动截图引擎，完成后创建隐藏面板，仅在 show 请求过时展示最新草稿，无返回值。
+    private func startEngine() {
+        // WindowEngine 等待 Dart 就绪；启动期间只保留最新展示模式。
+        pendingStartup = WindowEngine.start(
+            name: AppConstants.screenshotEngineName, entrypoint: AppConstants.screenshotEntrypoint,
+            channel: AppConstants.screenshotChannel,
+            handler: { [weak self] call, result in self?.handle(call, result: result) },
+            completion: { [weak self] started in
+                guard let self else { return }
+                self.pendingStartup = nil
+                guard let started else {
+                    // cancelCapture 清空未显示的草稿及采集身份，后续录制与实时翻译不能复用。
+                    self.cancelCapture()
+                    // reportStartFailure 在草稿清理后统一提示截图预览未就绪。
+                    WindowEngine.reportStartFailure("截图预览")
+                    return
+                }
+                self.engine = started.engine
+                self.channel = started.channel
+                let flutter = started.flutter
+                flutter.view.wantsLayer = true
+                flutter.view.layer?.isOpaque = false
+                flutter.view.layer?.backgroundColor = CGColor.clear
+                // makeWindow 使用最新模式创建承载当前草稿的窗口；预热时按最常用的冻结覆盖层创建。
+                self.window = self.makeWindow(
+                    content: flutter,
+                    overlay: self.showRequested ? self.pendingCompact || self.displaysFrozenScreen : true)
+                self.freezeView.imageScaling = .scaleAxesIndependently
+                self.freezeView.wantsLayer = true
+                // 预热只准备引擎与隐藏面板；换帧任务仍在读取系统画面时保持隐藏，由该任务完成后展示新草稿。
+                guard self.showRequested, !self.capturing else { return }
+                self.showRequested = false
+                // show 重新读取最新截图数据，避免展示启动时的旧草稿。
+                self.show(compact: self.pendingCompact)
+            })
     }
 
     /// content为共享编辑视图，overlay决定覆盖选区或普通结果；返回具备正确焦点与关闭契约的窗口。
@@ -728,18 +740,14 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         if freezeView.superview !== host {
             host.addSubview(freezeView, positioned: .below, relativeTo: nil)
         }
-        if compact || png == nil || !displaysFrozenScreen {
+        guard !compact, displaysFrozenScreen, let image else {
             freezeView.image = nil
             freezeView.isHidden = true
             return
         }
         freezeView.isHidden = false
-        let image = NSImage(data: png!)
-        if let image, let rep = image.representations.first {
-            image.size = NSSize(width: displayFrame.width, height: displayFrame.height)
-            _ = rep
-        }
-        freezeView.image = image
+        // 直接包装冻结帧 CGImage，按显示器点尺寸显示，不经 PNG 解码。
+        freezeView.image = NSImage(cgImage: image, size: displayFrame.size)
     }
 
     /// args携带源图像素坐标x/y/width/height；返回绑定冻结显示器的有效区域，越界或小尺寸抛错。

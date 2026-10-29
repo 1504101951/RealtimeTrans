@@ -185,9 +185,10 @@ Map<String, int> stepNumbers(Iterable<EditAnnotation> annotations) {
   };
 }
 
-/// 截图编辑文档：持有源 PNG、裁剪框与平铺标注，并合成导出位图。
+/// 截图编辑文档：持有源图、裁剪框与平铺标注，并合成导出位图。
 class EditDocument extends ChangeNotifier {
-  Uint8List? _sourcePng;
+  /// 源图；编辑画面、马赛克与取色预览、导出合成共用同一张图，由文档负责释放（#68 批次 A）。
+  ui.Image? _source;
   int _width = 0;
   int _height = 0;
   /// 本次编辑用到的「我的贴纸」位图（id → 图像），预览与导出共用；由截图页面按需加载（#103）。
@@ -198,8 +199,8 @@ class EditDocument extends ChangeNotifier {
   final List<_EditCommand> _redo = <_EditCommand>[];
   int _nextId = 0;
 
-  /// 无参数；返回当前源 PNG，未加载时为 null。
-  Uint8List? get sourcePng => _sourcePng;
+  /// 无参数；返回当前源图，未加载时为 null。
+  ui.Image? get source => _source;
 
   /// 无参数；返回源图像素宽。
   int get width => _width;
@@ -223,13 +224,14 @@ class EditDocument extends ChangeNotifier {
   bool get canRedo => _redo.isNotEmpty;
 
   /// 无参数；是否已加载可编辑源图。
-  bool get hasImage => _sourcePng != null && _width > 0 && _height > 0;
+  bool get hasImage => _source != null;
 
-  /// bytes 为捕获 PNG，width/height 为真实像素；新捕获清空草稿与历史，无返回值。
-  void loadCapture(Uint8List bytes, int width, int height) {
-    _sourcePng = bytes;
-    _width = width;
-    _height = height;
+  /// image 为捕获源图，文档接管其释放；释放上一张源图，新捕获清空草稿与历史，无返回值。
+  void loadCapture(ui.Image image) {
+    _source?.dispose();
+    _source = image;
+    _width = image.width;
+    _height = image.height;
     _crop = Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble());
     _annotations.clear();
     _undo.clear();
@@ -238,9 +240,17 @@ class EditDocument extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 无参数；释放源图后释放监听器，无返回值。
+  @override
+  void dispose() {
+    _source?.dispose();
+    super.dispose();
+  }
+
   /// 无参数；清空源图与编辑状态，用于原生关闭会话，无返回值。
   void clear() {
-    _sourcePng = null;
+    _source?.dispose();
+    _source = null;
     _width = 0;
     _height = 0;
     _crop = Rect.zero;
@@ -320,13 +330,10 @@ class EditDocument extends ChangeNotifier {
   /// beautify 为美化参数（null 表示不美化），unit 为每屏幕点的像素数；按当前裁剪与标注合成 PNG。
   /// 遮挡直接烤进像素，导出后不可还原原图；美化时画布向四周扩出内边距，内容按圆角裁切。
   Future<Uint8List> renderPng({BeautifyStyle? beautify, double unit = 1}) async {
-    final sourceBytes = _sourcePng;
-    if (sourceBytes == null || _width <= 0 || _height <= 0) {
+    final source = _source;
+    if (source == null) {
       throw StateError('没有可导出的截图');
     }
-    final codec = await ui.instantiateImageCodec(sourceBytes);
-    final frame = await codec.getNextFrame();
-    final source = frame.image;
     final crop = _clampCrop(_crop);
     final outWidth = crop.width.round().clamp(1, _width);
     final outHeight = crop.height.round().clamp(1, _height);
@@ -396,7 +403,7 @@ class EditDocument extends ChangeNotifier {
     image.dispose();
     if (!identical(picture, content)) picture.dispose();
     content.dispose();
-    source.dispose();
+    // 源图归文档所有，导出不释放；已录制的画面持有自己的引用，导出期间换图不影响本次合成。
     if (data == null) throw StateError('无法编码截图 PNG');
     return data.buffer.asUint8List();
   }

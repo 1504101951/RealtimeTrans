@@ -9,11 +9,12 @@ enum ScreenCaptureService {
     /// 显示器内容无法读取（编号缺失或不在可捕获列表）时显示给用户的提示。
     private static let displayUnreadableMessage = "无法读取显示器内容，请检查屏幕录制权限。"
 
-    /// 指针所在显示器的冻结帧，包含PNG像素、像素尺寸、AppKit显示坐标及可选前台窗口裁剪框。
+    /// 指针所在显示器的冻结帧，包含 BGRA 源图、像素尺寸、AppKit显示坐标及可选前台窗口裁剪框。
     struct FreezeFrame {
         let displayID: CGDirectDisplayID
         let scale: CGFloat
-        let png: Data
+        /// ScreenCaptureKit 输出的 BGRA（sRGB、8 位、alpha 在前、小端）源图，冻结显示与截图引擎共用（#68 批次 A）。
+        let image: CGImage
         let pixelWidth: Int
         let pixelHeight: Int
         /// AppKit 屏幕坐标下的显示器矩形，编辑窗与冻结帧对齐。
@@ -76,6 +77,7 @@ enum ScreenCaptureService {
 
     /// displayID明确目标屏，空值使用指针所在屏；showsCursor 为冻结帧是否包含鼠标指针。
     /// 返回冻结帧，目标消失时抛错，不切换到其他屏幕。
+    @MainActor
     static func captureActiveDisplay(displayID: CGDirectDisplayID?, showsCursor: Bool) async throws -> FreezeFrame {
         let mouse = NSEvent.mouseLocation
         let screen = displayID == nil
@@ -95,27 +97,39 @@ enum ScreenCaptureService {
                 userInfo: [NSLocalizedDescriptionKey: displayUnreadableMessage]
             )
         }
-        // 取帧、PNG 编码与前台窗口建议选区分别计时（#68「性能测量边界」）。
+        // 取帧与前台窗口建议选区分别计时（#68「性能测量边界」）。
         let captureStart = ContinuousClock.now
         let (image, scale) = try await captureDisplayImage(displayID: screenNumber, showsCursor: showsCursor)
         PerformanceLog.record("screenshot-capture-image", since: captureStart)
-        let encodeStart = ContinuousClock.now
-        let png = try PNGEncoding.data(image, scale: scale)
-        PerformanceLog.record("screenshot-png-encode", since: encodeStart)
-        let cropStart = ContinuousClock.now
-        defer { PerformanceLog.record("screenshot-window-crop", since: cropStart) }
-        return FreezeFrame(
-            displayID: screenNumber,
-            scale: scale,
-            png: png,
-            pixelWidth: image.width,
-            pixelHeight: image.height,
-            displayFrame: screen.frame,
-            windowCrop: CaptureGeometry.frontmostWindowPixelCrop(
+        // 截图引擎按 BGRA 原始字节建图；配置已要求 32BGRA，格式不符说明系统输出变化，直接报错。
+        let order = image.bitmapInfo.intersection(.byteOrderMask)
+        guard image.bitsPerComponent == 8, image.bitsPerPixel == 32, order == .byteOrder32Little,
+              [.premultipliedFirst, .noneSkipFirst, .first].contains(image.alphaInfo) else {
+            throw NSError(
+                domain: AppConstants.errorDomain,
+                code: 12,
+                userInfo: [NSLocalizedDescriptionKey: "截图像素格式不受支持。"]
+            )
+        }
+        // 只有「鼠标所在显示器」模式需要前台窗口建议选区；整屏截图不枚举窗口列表。
+        var windowCrop: NSRect?
+        if displayID == nil {
+            let cropStart = ContinuousClock.now
+            windowCrop = CaptureGeometry.frontmostWindowPixelCrop(
                 displayFrame: screen.frame,
                 pixelWidth: image.width,
                 pixelHeight: image.height
             )
+            PerformanceLog.record("screenshot-window-crop", since: cropStart)
+        }
+        return FreezeFrame(
+            displayID: screenNumber,
+            scale: scale,
+            image: image,
+            pixelWidth: image.width,
+            pixelHeight: image.height,
+            displayFrame: screen.frame,
+            windowCrop: windowCrop
         )
     }
 

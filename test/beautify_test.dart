@@ -8,6 +8,8 @@ import 'package:translate_app/src/screenshot/beautify.dart';
 import 'package:translate_app/src/screenshot/drawing_style.dart';
 import 'package:translate_app/src/screenshot/edit_document.dart';
 
+import 'support/capture_pixels.dart';
+
 /// width/height/color 为纯色原图参数；返回 PNG 字节。
 Future<Uint8List> solidPng(int width, int height, Color color) async {
   final recorder = ui.PictureRecorder();
@@ -49,7 +51,7 @@ void main() {
   test('不美化时导出与原图逐像素一致', () async {
     // 边界：background 为 null 是关闭美化的唯一状态，输出必须与原截图完全相同。
     final source = await solidPng(40, 30, blue);
-    final doc = EditDocument()..loadCapture(source, 40, 30);
+    final doc = EditDocument()..loadCapture(await decodePng(source));
     final plain = await decode(await doc.renderPng(unit: 2));
     final original = await decode(source);
     expect((plain.$1, plain.$2), (40, 30));
@@ -59,13 +61,10 @@ void main() {
   test('美化按像素倍率扩出内边距，背景从首色开始，圆角外为背景，阴影只加深背景', () async {
     // 边界：倍率 2、内边距 10pt → 每侧 20px；圆角 6pt → 12px，内容左上角像素落在圆角外。
     final source = await solidPng(40, 30, blue);
-    final doc = EditDocument()..loadCapture(source, 40, 30);
+    final doc = EditDocument()..loadCapture(await decodePng(source));
     final preset = DrawingMetrics.gradients[1];
     final style = BeautifyStyle(
-      background: (
-        color: preset.from,
-        gradient: FillGradient(end: preset.to),
-      ),
+      background: (color: preset.from, gradient: FillGradient(end: preset.to)),
       padding: 10,
       cornerRadius: 6,
       shadow: false,

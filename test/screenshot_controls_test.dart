@@ -17,6 +17,8 @@ import 'package:translate_app/src/screenshot/screenshot_app.dart';
 import 'package:translate_app/src/common/widgets/native_resize_cursor.dart';
 import 'package:translate_app/src/screenshot/screenshot_editor_layout.dart';
 
+import 'support/capture_pixels.dart';
+
 /// 无参数；验证工具栏避让的几何边界及硬件回车的真实编辑/导出结果。
 void main() {
   test('工具栏依次使用下、上、右、左侧空白，完整位于窗口且不与选区相交', () {
@@ -132,7 +134,8 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final png = await tester.runAsync(_image);
+    final png = await tester.runAsync(() => _image(width: 960, height: 740));
+    final capture = await tester.runAsync(() => capturePixels(png!));
     const channel = MethodChannel('test/crop-cursor');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -140,7 +143,7 @@ void main() {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'cursor',
-          'bytes': png,
+          ...capture!,
           'width': 960,
           'height': 740,
           'cropX': 200,
@@ -153,6 +156,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     await tester.pumpWidget(ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: const Offset(20, 20));
@@ -212,7 +217,8 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final png = await tester.runAsync(_image);
+    final png = await tester.runAsync(() => _image(width: 960, height: 740));
+    final capture = await tester.runAsync(() => capturePixels(png!));
     const channel = MethodChannel('test/crop-selected');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -220,7 +226,7 @@ void main() {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'selected',
-          'bytes': png,
+          ...capture!,
           'width': 960,
           'height': 740,
           'cropX': 200,
@@ -234,6 +240,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     await tester.pumpWidget(ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: const Offset(20, 20));
@@ -548,6 +556,8 @@ void main() {
           );
       await Future<void>.delayed(const Duration(milliseconds: 100));
     });
+    // 换图后源图重新异步建好，选区与画布才会恢复。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('ratio-row')), findsNothing);
     await _arrow(
@@ -565,6 +575,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final png = await tester.runAsync(() => _image(width: 960, height: 740));
+    final capture = await tester.runAsync(() => capturePixels(png!));
     const channel = MethodChannel('test/unified-cursor');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -573,7 +584,7 @@ void main() {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'unified',
-          'bytes': png,
+          ...capture!,
           'width': 960,
           'height': 740,
           'cropX': 200,
@@ -589,6 +600,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     await tester.pumpWidget(ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key(ScreenshotActions.cursor)));
     await tester.pumpAndSettle();
@@ -701,6 +714,7 @@ void main() {
 
   testWidgets('工具顺序与局部快捷键生效，文字编辑不切换工具，更新配置保留画布', (tester) async {
     final png = await tester.runAsync(_image);
+    final capture = await tester.runAsync(() => capturePixels(png!));
     final preferences = ScreenshotToolbarPreferences(
       order: ScreenshotActions.icons.keys.toList().reversed.toList(),
       hidden: {ScreenshotActions.text},
@@ -722,7 +736,7 @@ void main() {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'tool-test',
-          'bytes': png,
+          ...capture!,
           'width': 320,
           'height': 240,
           ...preferences.toMap(),
@@ -732,6 +746,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     await tester.pumpWidget(ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     final canvas = tester.getRect(find.byKey(const Key('screenshot-canvas')));
     expect(
@@ -799,6 +815,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final png = await tester.runAsync(_image);
+    final capture = await tester.runAsync(() => capturePixels(png!));
     const channel = MethodChannel('test/screenshot-enter');
     const codec = StandardMethodCodec();
     final messenger =
@@ -810,7 +827,7 @@ void main() {
         case MethodNames.getScreenshot:
           return {
             'id': 'enter',
-            'bytes': png,
+            ...capture!,
             'width': 320,
             'height': 240,
             'capturedAt': 0,
@@ -849,6 +866,8 @@ void main() {
       await tester.pumpWidget(
         ScreenshotApp(key: ValueKey(key), channel: channel),
       );
+      // 源图异步建好后文档才有图。
+      await awaitCaptureSource(tester);
       await tester.pumpAndSettle();
       final canvas = tester.getRect(find.byKey(const Key('screenshot-canvas')));
       final toolbar = tester.getRect(
@@ -896,6 +915,8 @@ void main() {
     await tester.pumpWidget(
       const ScreenshotApp(key: ValueKey('text-enter'), channel: channel),
     );
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('screenshot-tool-text')));
     await tester.pump();
@@ -957,13 +978,14 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final png = await tester.runAsync(_image);
+    final capture = await tester.runAsync(() => capturePixels(png!));
     const channel = MethodChannel('test/screenshot-toolbar-sides');
     const codec = StandardMethodCodec();
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     final snapshot = <String, Object?>{
       'id': 'sides',
-      'bytes': png,
+      ...capture!,
       'width': 320,
       'height': 240,
       'capturedAt': 0,
@@ -982,6 +1004,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     // 占满纵向，仅左右留白的两个选区，必须实际切换为竖向工具栏。
     for (final x in [0, 50]) {
@@ -992,6 +1016,8 @@ void main() {
         ),
         (_) {},
       );
+      // 换图后源图重新异步建好，选区与画布才会恢复。
+      await awaitCaptureSource(tester);
       await tester.pumpAndSettle();
       final canvas = tester.getRect(find.byKey(const Key('screenshot-canvas')));
       final crop = mapRectToFitted(
@@ -1049,13 +1075,14 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(_image);
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/copy-feedback');
     const codec = StandardMethodCodec();
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     final snapshot = <String, Object?>{
       'id': 'feedback',
-      'bytes': bytes,
+      ...capture!,
       'width': 320,
       'height': 240,
       'capturedAt': 0,
@@ -1070,6 +1097,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     final feedback = find.byKey(const Key('toolbar-feedback-bubble'));
     final copyButton = find.byKey(const Key('screenshot-copy'));
@@ -1128,7 +1157,8 @@ void main() {
       ),
       (_) {},
     );
-    await tester.pump();
+    // 换图后源图重新异步建好，选区与画布才会恢复。
+    await awaitCaptureSource(tester);
     await copy();
     final toastRect = tester.getRect(feedback);
     expect(
@@ -1152,7 +1182,8 @@ void main() {
       ),
       (_) {},
     );
-    await tester.pump();
+    // 换图后源图重新异步建好，选区与画布才会恢复。
+    await awaitCaptureSource(tester);
     expect(feedback, findsNothing);
     await tester.pump(const Duration(seconds: 4));
     expect(tester.takeException(), isNull);
@@ -1164,6 +1195,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(_image);
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
     const channel = MethodChannel('test/copy-feedback-stale-text');
     const codec = StandardMethodCodec();
     final messenger =
@@ -1172,7 +1204,7 @@ void main() {
     final copyPending = Completer<void>();
     final snapshot = <String, Object?>{
       'id': 'first',
-      'bytes': bytes,
+      ...capture!,
       'width': 320,
       'height': 240,
       'capturedAt': 0,
@@ -1191,6 +1223,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.byKey(const Key('screenshot-ocr-copy')));
     await tester.runAsync(() async {
@@ -1212,7 +1246,8 @@ void main() {
       ),
       (_) {},
     );
-    await tester.pump();
+    // 换图后源图重新异步建好，选区与画布才会恢复。
+    await awaitCaptureSource(tester);
     copyReply.complete();
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('toolbar-feedback-bubble')), findsNothing);
@@ -1251,11 +1286,12 @@ _pumpSelectedCrop(WidgetTester tester, String name) async {
   final png = await tester.runAsync(
     () => _coordinateImage(width: 960, height: 740),
   );
+  final capture = await tester.runAsync(() => capturePixels(png!));
   final channel = MethodChannel(name);
   final calls = <MethodCall>[];
   final snapshot = <String, Object?>{
     'id': 'crop',
-    'bytes': png,
+    ...capture!,
     'width': 960,
     'height': 740,
     'capturedAt': 0,
@@ -1273,6 +1309,8 @@ _pumpSelectedCrop(WidgetTester tester, String name) async {
   });
   addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
   await tester.pumpWidget(ScreenshotApp(channel: channel));
+  // 源图异步建好后文档才有图。
+  await awaitCaptureSource(tester);
   await tester.pumpAndSettle();
   return (channel: channel, calls: calls, snapshot: snapshot);
 }
@@ -1366,3 +1404,4 @@ Future<(Size, Rect)> _copyCrop(
   await tester.pumpAndSettle();
   return (rect!.size, rect);
 }
+

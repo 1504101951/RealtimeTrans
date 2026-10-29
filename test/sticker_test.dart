@@ -17,11 +17,6 @@ Future<ui.Image> _solid(int width, int height, Color color) async {
   return recorder.endRecording().toImage(width, height);
 }
 
-/// image 为图像；返回 PNG 字节。
-Future<Uint8List> _png(ui.Image image) async =>
-    (await image.toByteData(format: ui.ImageByteFormat.png))!.buffer
-        .asUint8List();
-
 /// bytes 为 PNG；返回宽、高与逐像素 RGBA。
 Future<(int, int, Uint8List)> _decode(Uint8List bytes) async {
   final codec = await ui.instantiateImageCodec(bytes);
@@ -43,8 +38,7 @@ void main() {
 
   /// rotation 为旋转弧度，bounds 为贴纸范围；返回装好 48×48 蓝色截图与红色贴纸的文档。
   Future<EditDocument> document(Rect bounds, {double rotation = 0}) async {
-    final doc = EditDocument()
-      ..loadCapture(await _png(await _solid(48, 48, blue)), 48, 48);
+    final doc = EditDocument()..loadCapture(await _solid(48, 48, blue));
     doc.stickerImages['red'] = await _solid(10, 10, const Color(0xFFFF0000));
     doc.addAnnotation(
       EditAnnotation(

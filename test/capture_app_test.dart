@@ -12,6 +12,8 @@ import 'package:translate_app/src/common/constants/screenshot_actions.dart';
 import 'package:translate_app/src/screenshot/screenshot_app.dart';
 import 'package:translate_app/src/settings/screenshot_toolbar_preferences.dart';
 
+import 'support/capture_pixels.dart';
+
 /// 无参数；验证工具状态、实际选区与媒体结果中的输入输出和边界。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -434,13 +436,14 @@ void main() {
   testWidgets('截图组动态目标行沿用裁剪区域，取消准备保留编辑', (tester) async {
     // 从320×240中框选中央160×120；录制确认与长截图直启均保留当前区域。
     final png = await tester.runAsync(_selectionImage);
+    final capture = await tester.runAsync(() => capturePixels(png!));
     const selectionChannel = MethodChannel('test/toolbar-capture');
     Map? selected;
     messenger.setMockMethodCallHandler(selectionChannel, (call) async {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'toolbar-selection',
-          'bytes': png,
+          ...capture!,
           'width': 320,
           'height': 240,
           'canCaptureMedia': true,
@@ -471,6 +474,8 @@ void main() {
     for (final scrolling in [false, true]) {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpWidget(const ScreenshotApp(channel: selectionChannel));
+      // 源图异步建好后文档才有图。
+      await awaitCaptureSource(tester);
       await tester.pumpAndSettle();
       final canvas = tester.getRect(find.byKey(const Key('screenshot-canvas')));
       await tester.dragFrom(
@@ -533,6 +538,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final png = await tester.runAsync(_selectionImage);
+    final capture = await tester.runAsync(() => capturePixels(png!));
     const sourceChannel = MethodChannel('test/application-toolbar');
     final semantics = tester.ensureSemantics();
     Map? submitted;
@@ -542,7 +548,7 @@ void main() {
           'id': 'apps',
           'captureDisplayX': -100,
           'captureDisplayY': -50,
-          'bytes': png,
+          ...capture!,
           'width': 320,
           'height': 240,
           'canCaptureMedia': true,
@@ -574,6 +580,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(sourceChannel, null));
     await tester.pumpWidget(const ScreenshotApp(channel: sourceChannel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     final canvasBefore = tester.getRect(
       find.byKey(const Key('screenshot-canvas')),
@@ -744,12 +752,13 @@ void main() {
   testWidgets('媒体结果图片不能作为屏幕选区启动采集', (tester) async {
     // 没有冻结帧身份的图片仍可留在编辑器里，但两个采集入口必须保持禁用。
     final png = await tester.runAsync(_selectionImage);
+    final capture = await tester.runAsync(() => capturePixels(png!));
     const selectionChannel = MethodChannel('test/image-capture-boundary');
     messenger.setMockMethodCallHandler(selectionChannel, (call) async {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'image-result',
-          'bytes': png,
+          ...capture!,
           'width': 320,
           'height': 240,
           'canCaptureMedia': false,
@@ -761,6 +770,8 @@ void main() {
       () => messenger.setMockMethodCallHandler(selectionChannel, null),
     );
     await tester.pumpWidget(const ScreenshotApp(channel: selectionChannel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     for (final action in [
       ScreenshotActions.record,
@@ -838,6 +849,7 @@ void main() {
     // 边界：快照中延时为 0 时按钮未选中；选「延时 5 秒」后保存参数为 5 且保留点击设置 true，
     // 按钮提示变为「录制选项：延时 5 秒」，开始录制的 delay 为 5；切到窗口目标后「显示鼠标点击」不可用。
     final png = await tester.runAsync(_selectionImage);
+    final capture = await tester.runAsync(() => capturePixels(png!));
     const selectionChannel = MethodChannel('test/recording-options');
     Map? saved;
     Map? started;
@@ -846,7 +858,7 @@ void main() {
         case MethodNames.getScreenshot:
           return {
             'id': 'options',
-            'bytes': png,
+            ...capture!,
             'width': 320,
             'height': 240,
             'canCaptureMedia': true,
@@ -867,6 +879,8 @@ void main() {
       () => messenger.setMockMethodCallHandler(selectionChannel, null),
     );
     await tester.pumpWidget(const ScreenshotApp(channel: selectionChannel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key(ScreenshotActions.record)));
     await tester.pumpAndSettle();
@@ -911,13 +925,14 @@ void main() {
     // 作用：实时翻译不依赖先选中截图工具。
     // 边界：当前工具为画笔时点击实时翻译，直接出现目标选择行；开始请求带 live 且不再携带录制参数。
     final png = await tester.runAsync(_selectionImage);
+    final capture = await tester.runAsync(() => capturePixels(png!));
     const selectionChannel = MethodChannel('test/live-top-level');
     Map? started;
     messenger.setMockMethodCallHandler(selectionChannel, (call) async {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'selection',
-          'bytes': png,
+          ...capture!,
           'width': 320,
           'height': 240,
           'canCaptureMedia': true,
@@ -933,6 +948,8 @@ void main() {
       () => messenger.setMockMethodCallHandler(selectionChannel, null),
     );
     await tester.pumpWidget(const ScreenshotApp(channel: selectionChannel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key(ScreenshotActions.brush)));
     await tester.pumpAndSettle();
@@ -959,6 +976,7 @@ void main() {
     // 边界：滚动长截图拼到画笔之下、录制为一级；选中画笔时第二行出现滚动长截图，选中截图时不出现；
     // 点击一级的录制后出现目标选择行，高亮的是录制而不是它借用的截图工具。
     final png = await tester.runAsync(_selectionImage);
+    final capture = await tester.runAsync(() => capturePixels(png!));
     const selectionChannel = MethodChannel('test/toolbar-tree');
     final toolbar = ScreenshotToolbarPreferences(
       order: [
@@ -973,7 +991,7 @@ void main() {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'selection',
-          'bytes': png,
+          ...capture!,
           'width': 320,
           'height': 240,
           'canCaptureMedia': true,
@@ -987,6 +1005,8 @@ void main() {
       () => messenger.setMockMethodCallHandler(selectionChannel, null),
     );
     await tester.pumpWidget(const ScreenshotApp(channel: selectionChannel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     // 初始工具是截图：它没有子级，第二行没有滚动长截图。
     expect(find.byKey(const Key(ScreenshotActions.scrolling)), findsNothing);
@@ -1006,6 +1026,7 @@ void main() {
   testWidgets('全屏选区准备按钮使用独立材料且保持可点，开始提交源像素并防重复', (tester) async {
     // 320×240冻结画面置于更大视口；输出仍是源图像素，异步确认不可重复提交。
     final png = await tester.runAsync(_selectionImage);
+    final capture = await tester.runAsync(() => capturePixels(png!));
     const selectionChannel = MethodChannel('test/capture-selection');
     final completion = Completer<void>();
     Map? selected;
@@ -1013,7 +1034,7 @@ void main() {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'selection',
-          'bytes': png,
+          ...capture!,
           'width': 320,
           'height': 240,
           'canCaptureMedia': true,
@@ -1033,6 +1054,8 @@ void main() {
       () => messenger.setMockMethodCallHandler(selectionChannel, null),
     );
     await tester.pumpWidget(const ScreenshotApp(channel: selectionChannel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key(ScreenshotActions.record)));
     await tester.pumpAndSettle();
@@ -1088,3 +1111,4 @@ Future<Uint8List> _selectionImage({int width = 320, int height = 240}) async {
   picture.dispose();
   return data!.buffer.asUint8List();
 }
+

@@ -8,6 +8,8 @@ import 'package:translate_app/src/common/constants/preference_keys.dart';
 import 'package:translate_app/src/common/constants/screenshot_actions.dart';
 import 'package:translate_app/src/screenshot/screenshot_app.dart';
 
+import 'support/capture_pixels.dart';
+
 /// 无参数；验证截图编辑器的取色、标尺与确认截图动作（#111）。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -154,6 +156,7 @@ Future<_Editor> _pumpEditor(
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
   final png = await tester.runAsync(_png);
+  final capture = await tester.runAsync(() => capturePixels(png!));
   final channel = MethodChannel(name);
   final calls = <String>[];
   final copies = <Uint8List>[];
@@ -167,7 +170,7 @@ Future<_Editor> _pumpEditor(
       case MethodNames.getScreenshot:
         return {
           'id': 'measure',
-          'bytes': png,
+          ...capture!,
           'width': 640,
           'height': 480,
           'capturedAt': 0,
@@ -184,6 +187,8 @@ Future<_Editor> _pumpEditor(
   });
   addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
   await tester.pumpWidget(ScreenshotApp(channel: channel));
+  // 源图异步建好后文档才有图。
+  await awaitCaptureSource(tester);
   await tester.pumpAndSettle();
   // 编辑器的源图解码使用真实图像线程，取色读取它的像素。
   await tester.runAsync(() => Future<void>.delayed(_decode));
@@ -218,3 +223,4 @@ Future<Uint8List> _png() async {
   picture.dispose();
   return bytes!.buffer.asUint8List();
 }
+

@@ -144,7 +144,6 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
   bool _shapeSelecting = false;
   /// 样式弹窗打开中：Esc 关闭弹窗、回车不导出、新截图先关闭弹窗。
   bool _dialogOpen = false;
-  ui.Image? _sourceImage;
 
   /// 标尺两端（截图像素）；不进入标注与撤销，切换工具或新截图后清除（#111）。
   ({Offset start, Offset end})? _ruler;
@@ -388,12 +387,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       Navigator.of(_editorKey.currentContext!).pop();
     }
     _feedbackTimer?.cancel();
-    final bytes = value['bytes'] as Uint8List?;
-    final width = (value['width'] as num?)?.toInt() ?? 0;
-    final height = (value['height'] as num?)?.toInt() ?? 0;
     setState(() {
-      _sourceImage?.dispose();
-      _sourceImage = null;
       _sourcePixels = null;
       _pixelLoad = null;
       _ruler = null;
@@ -432,44 +426,49 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       _resizeHandle = null;
       _cropSelected = false;
       _previewCrop = null;
-      if (bytes != null && width > 0 && height > 0) {
-        _document.loadCapture(bytes, width, height);
-        _loadSourceImage(bytes, value['id']);
-        final cropW = (value['cropWidth'] as num?)?.toDouble();
-        final cropH = (value['cropHeight'] as num?)?.toDouble();
-        if (cropW != null && cropH != null && cropW >= 1 && cropH >= 1) {
-          _document.setCrop(
-            Rect.fromLTWH(
-              (value['cropX'] as num?)?.toDouble() ?? 0,
-              (value['cropY'] as num?)?.toDouble() ?? 0,
-              cropW,
-              cropH,
-            ),
-          );
-          // 前台窗口只提供初始范围预览，首次拖动重新框选；整屏直接选中，可拖控制点调整（#105）。
-          _cropSelected = value['cropSelected'] == true;
-        }
-      } else {
-        _document.clear();
-      }
+      // 新源图异步建好后才装入；此前文档为空，画面由原生冻结视图显示。
+      _document.clear();
     });
+    unawaited(_loadSource(value));
   }
 
-  /// bytes为原图PNG、id为捕获身份；异步解码只更新同一会话的马赛克预览。
-  Future<void> _loadSourceImage(Uint8List bytes, Object? id) async {
-    // 原图解码计时（#68「性能测量边界」）。
+  /// value 为原生截图快照；按 BGRA 原始像素（pixels、rowBytes、width、height）建一次源图，
+  /// 仍是同一捕获时装入文档并设置初始选区，无快照像素时不加载；返回装入完成的 Future（#68 批次 A）。
+  Future<void> _loadSource(Map<Object?, Object?> value) async {
+    final pixels = value['pixels'] as Uint8List?;
+    if (pixels == null) return;
+    // 建图计时（#68「性能测量边界」）。
     final watch = Stopwatch()..start();
-    final codec = await ui.instantiateImageCodec(bytes);
-    final frame = await codec.getNextFrame();
-    codec.dispose();
-    unawaited(_perfMark('screenshot-dart-decode', watch));
-    if (!mounted || _capture['id'] != id) {
-      frame.image.dispose();
+    final built = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      pixels,
+      (value['width'] as num).toInt(),
+      (value['height'] as num).toInt(),
+      ui.PixelFormat.bgra8888,
+      built.complete,
+      rowBytes: value['rowBytes'] as int,
+    );
+    final image = await built.future;
+    unawaited(_perfMark('screenshot-dart-image', watch));
+    if (!mounted || _capture['id'] != value['id']) {
+      image.dispose();
       return;
     }
     setState(() {
-      _sourceImage?.dispose();
-      _sourceImage = frame.image;
+      _document.loadCapture(image);
+      final cropW = (value['cropWidth'] as num?)?.toDouble();
+      final cropH = (value['cropHeight'] as num?)?.toDouble();
+      if (cropW == null || cropH == null || cropW < 1 || cropH < 1) return;
+      _document.setCrop(
+        Rect.fromLTWH(
+          (value['cropX'] as num?)?.toDouble() ?? 0,
+          (value['cropY'] as num?)?.toDouble() ?? 0,
+          cropW,
+          cropH,
+        ),
+      );
+      // 前台窗口只提供初始范围预览，首次拖动重新框选；整屏直接选中，可拖控制点调整（#105）。
+      _cropSelected = value['cropSelected'] == true;
     });
   }
 
@@ -1097,12 +1096,12 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
 
   /// 无参数；返回解码当前源图非预乘 RGBA 的任务，同一张截图只解码一次；源图尚未解码完成时不缓存，下次取色重试（#111）。
   Future<void> _sourcePixelsReady() {
-    final image = _sourceImage;
+    final image = _document.source;
     if (image == null) return Future.value();
     return _pixelLoad ??= image
         .toByteData(format: ui.ImageByteFormat.rawStraightRgba)
         .then((data) {
-          if (mounted && image == _sourceImage) {
+          if (mounted && image == _document.source) {
             setState(() => _sourcePixels = data);
           }
         });
@@ -2311,7 +2310,6 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
   /// 无参数；解除原生回调与文档监听，无返回值。
   @override
   void dispose() {
-    _sourceImage?.dispose();
     _feedbackTimer?.cancel();
     _document.removeListener(_onDocumentChanged);
     _document.dispose();
@@ -2450,7 +2448,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
                       ((_recordingExpanded || _liveExpanded) &&
                           _recordingTarget != CaptureTarget.region),
                   textInputOpen: _textInputOpen && !_dialogOpen,
-                  sourceImage: _sourceImage,
+                  sourceImage: _document.source,
                   selectedShape: _selectedShapeId == null
                       ? null
                       : _styleSelection,
@@ -3472,15 +3470,12 @@ class _EditorSurfaceState extends State<_EditorSurface> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  Image.memory(
-                    widget.document.sourcePng!,
+                  // 直接绘制文档源图，与马赛克预览及导出共用，不再解码 PNG。
+                  RawImage(
+                    image: widget.document.source,
                     fit: BoxFit.fill,
-                    scale: MediaQuery.devicePixelRatioOf(context),
-                    cacheWidth: widget.document.width,
-                    cacheHeight: widget.document.height,
                     filterQuality: FilterQuality.none,
                     isAntiAlias: false,
-                    gaplessPlayback: true,
                   ),
                   CustomPaint(
                     painter: _OverlayPainter(

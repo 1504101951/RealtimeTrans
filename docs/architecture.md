@@ -112,11 +112,11 @@ AX 读取优先使用文本标记范围获取跨节点选区，再读取普通�
 
 ## 区域截图
 
-Swift 的系统截图模块用本进程 ScreenCaptureKit 申请屏幕录制并取得显示器冻结帧；未授权不进入编辑。Dart 的 `ScreenshotApp` 在冻结帧上框选（选区外变暗、选区内清晰），负责标注、自动文件名和导出。截图结果用独立 captureId 拒绝过期操作，不属于选区会话。
+Swift 的系统截图模块用本进程 ScreenCaptureKit 申请屏幕录制并取得显示器冻结帧；未授权不进入编辑。冻结帧是 BGRA（sRGB、8 位）`CGImage`，原生冻结视图直接显示；截图快照以 `pixels`（原始字节）与 `rowBytes`、`width`、`height` 交给截图引擎，全程不编解码 PNG。Dart 的 `ScreenshotApp` 用 `ui.decodeImageFromPixels` 建一次源图交给 `EditDocument`，编辑画面、马赛克与取色预览、导出合成共用；它在冻结帧上框选（选区外变暗、选区内清晰），负责标注、自动文件名和导出。识别文字与二维码使用 Dart 合成后交来的 PNG。截图结果用独立 captureId 拒绝过期操作，不属于选区会话。主界面就绪后 `ScreenshotWindowController.prewarm` 预热截图引擎与隐藏面板，首次截图直接复用。
 
 固定目录保存在 UserDefaults 的 `screenshotSaveDirectory`，只通过设置页修改。ScreenshotStorage 通过拒绝覆盖的实际写入和序号处理重名。翻译、输入翻译与截图热键由同一 Carbon 注册事务管理，已有组合交换用途时复用注册，全部新注册成功才更新配置。
 
-`ScreenshotWindowController.capture(_:)` 接收 `ScreenshotTarget`：指针所在屏以前台窗口为建议选区，指定显示器选中整屏并经快照 `cropSelected` 让 Dart 直接进入选中状态。`capture(_:)` 入口经 `CaptureWindowController.cancelCountdown` 结束未到时的录制倒计时，被替换的截图草稿不再恢复。冻结帧是否包含指针取偏好字典 `screenshotIncludesCursor`，`captureDisplayImage` 显式接收该选项，MCP 固定不含指针。
+`ScreenshotWindowController.capture(_:)` 接收 `ScreenshotTarget`：指针所在屏以前台窗口为建议选区（只有该模式枚举窗口列表），指定显示器选中整屏并经快照 `cropSelected` 让 Dart 直接进入选中状态。`capture(_:)` 入口经 `CaptureWindowController.cancelCountdown` 结束未到时的录制倒计时，被替换的截图草稿不再恢复。冻结帧是否包含指针取偏好字典 `screenshotIncludesCursor`，`captureDisplayImage` 显式接收该选项，MCP 固定不含指针。
 
 区域框选时暂停文本手势采集并隐藏翻译浮层，完成后只恢复仍有效的浮层。截图的复制与保存不经过翻译层；“识别文字”“翻译文字”（`ScreenshotActions.ocrTranslate`，`_translateOcr`）经本地 OCR 取得文字后，由 `translateScreenshotText` 进入同一翻译层。
 
@@ -160,7 +160,7 @@ DrawingStyle是标注组合的不可变样式，颜色与线宽控件只返回�
 
 图形工具采用rect配置身份，四种图形、编号标记和普通/马赛克/荧光笔画笔通过同一绘制方法服务预览与PNG导出；浮层选择框不进入像素。编号标记（#107）为 `AnnotationKind.step`，编号不存进标注，由 `stepNumbers` 按文档标注顺序推导后传给 `EditDocument.paintAnnotation`，撤销/重做增删标记后其余编号自然更新。荧光笔为 `ShapeMode.highlighter`，样式颜色保持不透明，绘制时整条轨迹一次施加 40% 不透明度。共享数值在common/constants/drawing_metrics.dart，控件在screenshot/drawing_controls.dart。
 
-取色与标尺（#111）是截图编辑器的瞬时状态，由 `screenshot/measure_layer.dart` 的 `MeasureLayer` 叠加在标注之上显示，不进入 `EditDocument`、撤销与导出：取色在每张截图首次使用时把 `_sourceImage` 解码为非预乘 RGBA 并缓存，按悬停或单击处的截图像素读取颜色，经 `copyText` 复制 `#RRGGBB`；标尺只保存两端截图像素。确认截图的动作 `screenshotConfirmAction` 由 Swift 随截图快照与工具栏变更通知交给截图引擎。
+取色与标尺（#111）是截图编辑器的瞬时状态，由 `screenshot/measure_layer.dart` 的 `MeasureLayer` 叠加在标注之上显示，不进入 `EditDocument`、撤销与导出：取色在每张截图首次使用时把 `EditDocument.source` 读为非预乘 RGBA 并缓存，按悬停或单击处的截图像素读取颜色，经 `copyText` 复制 `#RRGGBB`；标尺只保存两端截图像素。确认截图的动作 `screenshotConfirmAction` 由 Swift 随截图快照与工具栏变更通知交给截图引擎。
 
 DrawingPreferences按工具保存颜色、线宽、形状与画笔模式，主Dart设置队列验证并写入screenshotDrawing偏好。历史SQLite插入成功通知原生转发historyChanged，窗口内按请求版本重载；主题内层Builder驱动完整历史列表样式重建。
 

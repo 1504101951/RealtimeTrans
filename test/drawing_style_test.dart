@@ -16,6 +16,8 @@ import 'package:translate_app/src/common/constants/drawing_metrics.dart';
 import 'package:translate_app/src/screenshot/drawing_style.dart';
 import 'package:translate_app/src/screenshot/edit_document.dart';
 
+import 'support/capture_pixels.dart';
+
 /// 生成带逐列颜色差异的48px原图，用于区分真实马赛克与纯色覆盖。
 Future<Uint8List> fixture() async {
   final recorder = ui.PictureRecorder();
@@ -134,7 +136,7 @@ void main() {
 
   test('圆形填充与圆形描边仅改变对应像素，马赛克画笔不覆盖轨迹外', () async {
     final source = await fixture();
-    final doc = EditDocument()..loadCapture(source, 48, 48);
+    final doc = EditDocument()..loadCapture(await decodePng(source));
     doc.addAnnotation(
       EditAnnotation(
         id: '',
@@ -187,7 +189,7 @@ void main() {
 
   test('马赛克以12px分块采样原图，区域外不变且可撤销', () async {
     final source = await fixture();
-    final doc = EditDocument()..loadCapture(source, 48, 48);
+    final doc = EditDocument()..loadCapture(await decodePng(source));
     doc.addAnnotation(
       EditAnnotation(
         id: '',
@@ -213,7 +215,7 @@ void main() {
   });
 
   test('颜色与线宽快照隔离，更新目标只产生一次可撤销变化', () async {
-    final doc = EditDocument()..loadCapture(await fixture(), 48, 48);
+    final doc = EditDocument()..loadCapture(await decodePng(await fixture()));
     const style = DrawingStyle(color: Colors.red, strokeWidth: 3);
     final first = doc.addAnnotation(
       EditAnnotation(
@@ -306,6 +308,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final source = await tester.runAsync(fixture);
+    final capture = await tester.runAsync(() => capturePixels(source!));
     const channel = MethodChannel('test/tool-properties');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -314,7 +317,7 @@ void main() {
       if (call.method == MethodNames.getScreenshot) {
         return {
           'id': 'properties',
-          'bytes': source,
+          ...capture!,
           'width': 48,
           'height': 48,
           PreferenceKeys.screenshotDrawing: ?saved,
@@ -342,6 +345,8 @@ void main() {
     }
 
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     // 默认截图组显示采集入口；绘图属性仅在切到对应绘图工具后出现。
     expect(find.byKey(const Key(ScreenshotActions.record)), findsOneWidget);
@@ -389,6 +394,8 @@ void main() {
     await tap('${ScreenshotActions.brushPrefix}mosaic');
     await tester.pumpWidget(const SizedBox());
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     await tap(ScreenshotActions.rect);
     await color('FF9500', 'FF9500');
@@ -451,13 +458,14 @@ void main() {
       picture.dispose();
       return bytes!.buffer.asUint8List();
     });
+    final capture = await tester.runAsync(() => capturePixels(png!));
     const channel = MethodChannel('test/drawing-integration');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     Uint8List? exported;
     messenger.setMockMethodCallHandler(channel, (call) async {
       if (call.method == MethodNames.getScreenshot) {
-        return {'id': 'drawing', 'bytes': png, 'width': 480, 'height': 400};
+        return {'id': 'drawing', ...capture!};
       }
       if (call.method == MethodNames.copyScreenshot) {
         exported = (call.arguments as Map)['bytes'] as Uint8List;
@@ -467,6 +475,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // 源图异步建好后文档才有图。
+    await awaitCaptureSource(tester);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key(ScreenshotActions.rect)));
     await tester.dragFrom(const Offset(100, 100), const Offset(160, 120));
@@ -606,7 +616,7 @@ void main() {
 
   test('渐变填充图形：左端为起始色、右端为结束色；绘图偏好往返保留渐变，缺失即纯色（#103）', () async {
     // 边界：48px 宽的实心矩形，方向 →，红到蓝；第 1 列接近红、第 46 列接近蓝。
-    final doc = EditDocument()..loadCapture(await fixture(), 48, 48);
+    final doc = EditDocument()..loadCapture(await decodePng(await fixture()));
     doc.addAnnotation(
       EditAnnotation(
         id: 'g',
@@ -640,3 +650,4 @@ void main() {
     expect(restored.styleFor(ScreenshotTool.text).gradient, isNull);
   });
 }
+

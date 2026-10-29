@@ -12,6 +12,8 @@ import 'package:translate_app/src/screenshot/drawing_style.dart';
 import 'package:translate_app/src/screenshot/edit_document.dart';
 import 'package:translate_app/src/screenshot/screenshot_app.dart';
 
+import 'support/capture_pixels.dart';
+
 /// 无参数；验证步骤编号的推导、样式与放置，以及荧光笔的半透明叠加与默认样式（#107）。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -19,7 +21,8 @@ void main() {
   test('编号按标注顺序推导：撤销、重做与删除中间标记后其余编号随顺序更新', () async {
     // 边界：中间夹一个矩形不占编号；撤销最后一个后只剩 1、2，重做恢复 3；
     // 删除第 2 个后第 3 个前移为 2，撤销删除后回到原位置与原编号。
-    final doc = EditDocument()..loadCapture(await _png(64, 64), 64, 64);
+    final doc = EditDocument()
+      ..loadCapture(await decodePng(await _png(64, 64)));
     String step(double x) => doc.addAnnotation(
       EditAnnotation(
         id: '',
@@ -51,7 +54,8 @@ void main() {
   test('编号为实心圆，数字按圆亮度取白或黑，三位数缩小后宽度不超过直径 80%', () async {
     // 边界：蓝色（亮度低）配白字、黄色 #FFCC00（亮度约 0.66 > 0.5）配黑字；
     // 第 100 个标记的三位数字原字号会超出 22.4px，缩小后像素宽度不超过 23px（含抗锯齿 1px）。
-    final doc = EditDocument()..loadCapture(await _png(96, 64), 96, 64);
+    final doc = EditDocument()
+      ..loadCapture(await decodePng(await _png(96, 64)));
     final blue = Rect.fromCircle(center: const Offset(20, 32), radius: 14);
     final yellow = Rect.fromCircle(center: const Offset(76, 32), radius: 14);
     doc.addAnnotation(
@@ -114,7 +118,7 @@ void main() {
     // 边界：白底上黄色 #FFCC00 的 40% 混合为 (255,235,153)；同一笔来回经过同一像素结果不变；
     // 第二笔交叉处再混合一次为 (255,223,92)；黑色区域只得到 (102,82,0)，仍远暗于高亮背景。
     final doc = EditDocument()
-      ..loadCapture(await _png(40, 40, blackFrom: 20), 40, 40);
+      ..loadCapture(await decodePng(await _png(40, 40, blackFrom: 20)));
     EditAnnotation highlight(List<Offset> points) => EditAnnotation(
       id: '',
       kind: AnnotationKind.stroke,
@@ -251,6 +255,7 @@ Future<_Editor> _pumpEditor(WidgetTester tester, String name) async {
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
   final png = await tester.runAsync(() => _png(640, 480));
+  final capture = await tester.runAsync(() => capturePixels(png!));
   final channel = MethodChannel(name);
   final copies = <Uint8List>[];
   final messenger =
@@ -259,7 +264,7 @@ Future<_Editor> _pumpEditor(WidgetTester tester, String name) async {
     if (call.method == MethodNames.getScreenshot) {
       return {
         'id': 'annotate',
-        'bytes': png,
+        ...capture!,
         'width': 640,
         'height': 480,
         'capturedAt': 0,
@@ -272,6 +277,8 @@ Future<_Editor> _pumpEditor(WidgetTester tester, String name) async {
   });
   addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
   await tester.pumpWidget(ScreenshotApp(channel: channel));
+  // 源图异步建好后文档才有图。
+  await awaitCaptureSource(tester);
   await tester.pumpAndSettle();
   return (channel: channel, copies: copies);
 }
@@ -362,3 +369,4 @@ void _expectNear(List<int> actual, List<int> expected) {
     );
   }
 }
+
