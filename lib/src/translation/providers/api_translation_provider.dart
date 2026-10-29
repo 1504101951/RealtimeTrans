@@ -11,24 +11,30 @@ import '../glossary.dart';
 import '../model_result.dart';
 import '../numbered_batch.dart';
 import '../paragraph_translation.dart';
+import '../translation_http.dart';
 import '../translation_types.dart';
 
-/// 配置型翻译服务。单篇翻译每个请求独占连接；批量翻译使用调用方传入的连接。
+/// 配置型翻译服务。单篇翻译使用应用共享的 HTTP 客户端，取消只中止本次请求；批量翻译使用调用方传入的客户端。
 class ApiTranslationProvider implements BatchTranslationProvider {
   /// config/credentials 为服务配置与凭据读取；mode 为处理模式，翻译外的模式只用于模型服务；
   /// prompt 为该模式的系统提示词，thinking 为该模式的思考开关，二者只对模型服务生效；
-  /// glossary 为术语表，只有模型服务的翻译请求使用。
+  /// glossary 为术语表，只有模型服务的翻译请求使用；
+  /// semanticPairs 为本 Provider 是否要求模型返回双语段落对照，由调用方决定（输入翻译固定 false），只对模型服务的翻译模式生效。
   ApiTranslationProvider({
     required this.config,
     required this.credentials,
     required this.prompt,
     required this.thinking,
+    required this.semanticPairs,
     this.mode = TextMode.translate,
     this.glossary = const [],
   });
   final ServiceConfig config;
   final Future<Map<String, String>> Function() credentials;
   final TextMode mode;
+
+  /// 是否使用 JSON segments 协议整片请求并返回段落配对；不读取 config.semanticPairs，使同一服务在不同入口可有不同取舍。
+  final bool semanticPairs;
 
   /// 本模式的系统提示词，来自设置中全部模型服务共用的提示词（#100）。
   final String prompt;
@@ -53,7 +59,7 @@ class ApiTranslationProvider implements BatchTranslationProvider {
     // 润色、纠错与解释的输出不与原文段落对应，整片直接交给模型，也不走「已是目标语言」的直通。
     if (mode != TextMode.translate) return _translate(request);
     // 语义模型需要整篇上下文，整片发送并校验配对。
-    if (config.isModel && config.semanticPairs) {
+    if (config.isModel && semanticPairs) {
       return translateParagraphs(_translate, request);
     }
     // 其他服务按原文段落建立一一对应，分批调用批量接口（#113）。
@@ -109,11 +115,23 @@ class ApiTranslationProvider implements BatchTranslationProvider {
   /// request 为一次服务请求的文本与方向；返回协议解析后的事件流，取消时关闭连接。
   Stream<TranslationEvent> _translate(TranslationRequest request) {
     // 段落对照只属于翻译模式；润色、纠错与解释返回整段纯文本。
-    final semantic = config.semanticPairs && mode == TextMode.translate;
-    final client = HttpClient()
-      ..connectionTimeout = NetworkLimits.connectionTimeout;
+    final semantic = semanticPairs && mode == TextMode.translate;
     final output = StreamController<TranslationEvent>();
     var active = true;
+    // 共享客户端不随单次请求关闭；取消时中止本次请求并停止读取响应。
+    HttpClientRequest? pending;
+    StreamIterator<String>? additions;
+
+    /// response 为服务响应；读完正文并返回文本，取消时停止读取，保证连接可回到共享连接池或被丢弃。
+    Future<String> readBody(HttpClientResponse response) async {
+      final body = StringBuffer();
+      final stream = StreamIterator(utf8.decoder.bind(response));
+      additions = stream;
+      while (await stream.moveNext()) {
+        body.write(stream.current);
+      }
+      return body.toString();
+    }
 
     /// event 为业务事件；取消后不再发布迟到结果，无返回值。
     void emit(TranslationEvent event) {
@@ -133,7 +151,9 @@ class ApiTranslationProvider implements BatchTranslationProvider {
         throw _ApiFailure(error.message, kind: TranslationFailureKind.service);
       }
       if (!active) return;
-      final http = await client.postUrl(_endpoint());
+      // translationHttpClient 为应用共享客户端，复用与服务之间的连接。
+      final http = await translationHttpClient.postUrl(_endpoint());
+      pending = http;
       if (!active) return;
       // 不随重定向把凭据或原文发送到另一个地址。
       http.followRedirects = false;
@@ -205,13 +225,12 @@ class ApiTranslationProvider implements BatchTranslationProvider {
         // 正文只用于读取错误码，区分频率受限与额度不足，不回显（#118）。
         throw _statusFailure(
           response.statusCode,
-          await utf8.decoder.bind(response).join(),
+          await readBody(response),
           response.headers.value('retry-after'),
         );
       }
       if (!config.isModel) {
-        final data =
-            jsonDecode(await utf8.decoder.bind(response).join()) as Map;
+        final data = jsonDecode(await readBody(response)) as Map;
         // 两个解析函数各自校验服务错误并返回按原文顺序排列的译文。
         final text =
             (config.kind == 'baidu'
@@ -225,9 +244,12 @@ class ApiTranslationProvider implements BatchTranslationProvider {
       }
 
       final buffer = StringBuffer();
-      // _modelAdditions 解析流式事件并校验结束原因，逐个给出新增译文。
-      await for (final addition in _modelAdditions(response)) {
+      // _modelAdditions 解析流式事件并校验结束原因，逐个给出新增译文；迭代器供取消时立即停止读取。
+      final stream = StreamIterator(_modelAdditions(response));
+      additions = stream;
+      while (await stream.moveNext()) {
         if (!active) return;
+        final addition = stream.current;
         buffer.write(addition);
         if (!semantic && addition.isNotEmpty) {
           emit(TranslationUpdate(addition));
@@ -253,13 +275,16 @@ class ApiTranslationProvider implements BatchTranslationProvider {
         emit(TranslationFailure(_failureOf(error).message));
       } finally {
         active = false;
-        client.close(force: true);
+        // 只中止本次请求并停止读取响应，不关闭共享客户端。
+        pending?.abort();
+        await additions?.cancel();
         await output.close();
       }
     };
     output.onCancel = () {
       active = false;
-      client.close(force: true);
+      pending?.abort();
+      return additions?.cancel();
     };
     return output.stream;
   }

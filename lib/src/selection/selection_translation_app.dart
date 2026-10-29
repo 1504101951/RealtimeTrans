@@ -175,8 +175,11 @@ class _TranslateAppState extends State<TranslateApp> {
             : widget.session.snapshot.phase != TranslationPhase.trigger)) {
       return;
     }
+    // 输入翻译使用不含段落对照的服务（与语言方向的选择方式一致）。
     final activeProvider = retry
         ? widget.session.activeProvider
+        : _replaceSessionId == id
+        ? widget.session.inputProvider
         : widget.session.provider;
     // 历史记录的目标语言按本次实际使用的一组语言解析：输入翻译用输入翻译语言（#99）。
     final activeLanguage = retry
@@ -185,6 +188,16 @@ class _TranslateAppState extends State<TranslateApp> {
         ? widget.session.inputLanguage
         : widget.session.language;
     final sourceLabel = _sourceAppName;
+    // 输入翻译从发起翻译起分段计时；只记录阶段名与毫秒，不含文本。
+    final watch = _replaceSessionId == id ? (Stopwatch()..start()) : null;
+    // 首个非空译文到达时记录一次 input-first-token，随后移除监听。
+    void markFirstToken() {
+      if (widget.session.snapshot.translatedText.isEmpty) return;
+      widget.session.removeListener(markFirstToken);
+      unawaited(widget.bridge.perfMark('input-first-token', watch!));
+    }
+
+    if (watch != null) widget.session.addListener(markFirstToken);
     // 读取与翻译共用会话取消边界，迟到的原文不能覆盖用户的新选区。
     if (retry) {
       // 原文、方向和服务都属于失败会话；重试不重新读取前台选区。
@@ -195,6 +208,14 @@ class _TranslateAppState extends State<TranslateApp> {
             ? () => widget.bridge.readSelectionForTranslation(sessionId: id)
             : null,
       );
+    }
+    if (watch != null) {
+      widget.session.removeListener(markFirstToken);
+      // 完整成功才记录 input-complete；失败或取消不产生该阶段。
+      if (widget.session.sessionId == id &&
+          widget.session.snapshot.phase == TranslationPhase.completed) {
+        unawaited(widget.bridge.perfMark('input-complete', watch));
+      }
     }
     // _record 只在翻译模式完整成功时记录历史。
     _record(id, activeProvider, activeLanguage, sourceLabel);
@@ -208,12 +229,18 @@ class _TranslateAppState extends State<TranslateApp> {
     if (widget.session.sessionId != id) return;
     final snapshot = widget.session.snapshot;
     // replaceSelection 返回 null 表示已替换，否则为未替换原因；翻译未完成时直接使用失败说明。
-    final failure = snapshot.phase == TranslationPhase.completed
-        ? await widget.bridge.replaceSelection(
-            sessionId: id,
-            text: snapshot.translatedText,
-          )
-        : snapshot.message ?? '翻译失败';
+    final String? failure;
+    if (snapshot.phase == TranslationPhase.completed) {
+      // input-replace 只计 replaceSelection 的耗时。
+      final replace = Stopwatch()..start();
+      failure = await widget.bridge.replaceSelection(
+        sessionId: id,
+        text: snapshot.translatedText,
+      );
+      unawaited(widget.bridge.perfMark('input-replace', replace));
+    } else {
+      failure = snapshot.message ?? '翻译失败';
+    }
     if (widget.session.sessionId != id) return;
     // showInputFailure 需要原生会话仍在，必须先于 _dismiss 释放会话。
     if (failure != null) {

@@ -14,3 +14,4 @@
 10. [live_block_cache.dart](live_block_cache.dart)：按内存预算保存一次实时翻译会话的段落块译文与失败记录。
 11. [numbered_batch.dart](numbered_batch.dart)：为批次内段落编号，并把模型的流式输出按编号归属到段落。
 12. [glossary.dart](glossary.dart)：定义术语条目，按目标语言与整词规则筛选本次请求命中的术语。
+13. [translation_http.dart](translation_http.dart)：提供翻译请求共用的 HTTP 客户端，复用与服务之间的连接。

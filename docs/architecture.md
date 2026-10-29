@@ -68,14 +68,14 @@ AX 读取优先使用文本标记范围获取跨节点选区，再读取普通�
 - 打开设置仅查询 Keychain 凭据存在状态，禁止查询触发授权 UI。保存普通配置不读取密钥；有凭据变更时 Swift 才读取对应账户的回滚快照。凭据、登录项与快捷键配置成功后才保存普通偏好；同一服务 ID 不可更换协议。
 - 默认服务支持非官方 Google、Google Cloud v2、百度通用翻译、OpenAI-compatible Chat Completions、DeepSeek、Anthropic Messages 与 Apple 系统翻译。协议、百度签名、SSE 解析均由 Dart 实现。各模式的提示词与思考开关在 `AppSettings.prompts`、`AppSettings.thinking`（偏好 `PreferenceKeys.prompts`、`PreferenceKeys.thinking`），全部模型服务共用，缺省提示词为 `defaultPrompts`、思考缺省关闭；`ApiTranslationProvider` 由构造参数接收本模式的 `prompt` 与 `thinking`。DeepSeek 类型及官方域名按开关发送 `thinking.type=enabled/disabled`，Anthropic 开启时发送 `thinking`（`budget_tokens` 为 `NetworkLimits.anthropicThinkingBudget`，最大输出不大于预算时连接前报错），OpenAI 官方与其他兼容端点不发送思考参数；段落模式另向 DeepSeek 发送 `response_format.type=json_object`。
 - Apple 系统翻译（`ServiceConfig.isSystem`）无端点、无凭据。`AppleTranslationProvider` 把每个分片的非空段落一次交给 `SystemTranslationService`，以下标对应原段并由 `pairParagraph` 套回原文分隔；Swift 按语言对创建只用已安装语言包的无界面 `TranslationSession`，单篇翻译传高保真策略、实时翻译传低延迟策略（macOS 26.4 以下不传）。取消按请求 ID 停止原生会话；语言包未安装与语言对不支持为服务级失败，原文语言未知为单段失败。测试连接只查询主次语言双向的安装状态。
-- 每个请求独占 HttpClient；取消关闭连接，请求不跟随重定向，失败信息不回显响应正文或密钥，也不自动切换服务。
+- 翻译请求共用应用级 `translationHttpClient`（`lib/src/translation/translation_http.dart`，连接超时 `NetworkLimits.connectionTimeout`、空闲保持 `NetworkLimits.idleTimeout`），同一服务的连续请求复用连接；取消只中止本次请求并停止读取响应，不关闭该客户端；请求不跟随重定向，失败信息不回显响应正文或密钥，也不自动切换服务。
 - 模型段落对照一次接收全文上下文：本地按非空行分段并给出连续编号，模型仅返回各编号与完整译文。编号数量、顺序、整数类型和非空译文均需通过校验，再与本地原文配对；不使用模型回传的原文，不接受整篇高亮兜底。损坏 JSON、流中断和长度截断不算成功。
 - 卡片按 `SelectionSession.definition` 与 `sourceIsTarget`（翻译模式下识别语言等于输出语言）在词典、同语言单栏与普通双栏三种布局间选择；正文区填充主题 `cardTheme.color` 阅读底色，不随玻璃透明度变化。
 - 卡片各栏的朗读按钮经 `toggleSpeech` 交给 Swift `SpeechService`（`AVSpeechSynthesizer`）：原文按识别语言、结果栏按 `SelectionSession.outputLanguage` 朗读，语言码先补全默认地区再选系统声音；同一段再次请求即停止，关闭卡片、新选区与切换模式时 Dart 发送 `stopSpeech`。
-- 卡片模式菜单与服务菜单通过 `SelectionSession.switchMode`、`switchService` 共用的重新处理流程对同一原文重跑：未选择服务时翻译模式使用会话服务，润色、纠错、解释由 `assistProviderForSettings` 构造；服务菜单选择保存在 `serviceOverride`（新选区清空），经 `providerForService`、`assistProviderForService` 按服务 id 构造。润色、纠错、解释的 `ApiTranslationProvider` 使用本模式的提示词与思考开关、整段请求并关闭段落对照；服务不是模型服务时返回 null，卡片显示失败说明。只有翻译模式的完整成功写入历史，输入翻译也只在翻译模式下替换原文。
+- 卡片模式菜单与服务菜单通过 `SelectionSession.switchMode`、`switchService` 共用的重新处理流程对同一原文重跑：未选择服务时翻译模式使用会话服务，润色、纠错、解释由 `assistProviderForSettings` 构造；服务菜单选择保存在 `serviceOverride`（新选区清空），经 `providerForService`、`assistProviderForService` 按服务 id 构造。润色、纠错、解释的 `ApiTranslationProvider` 使用本模式的提示词与思考开关、整段请求并关闭段落对照；服务不是模型服务时返回 null，卡片显示失败说明。只有翻译模式的完整成功写入历史，输入翻译也只在翻译模式下替换原文。输入翻译只需要替换文本，其服务由 `providerForInput` 构造（`SelectionSession.inputProvider`，设置保存后随 `inputLanguage` 一同更新），`ApiTranslationProvider.semanticPairs` 固定为 false，即使默认服务开启双语段落对照也走普通分段协议（`translateParagraphBatches`）；默认翻译与卡片服务菜单的 `semanticPairs` 取服务配置。
 - 术语表 `GlossaryEntry` 列表随 `AppSettings` 保存在偏好字典（键 `glossary`），Swift 不读取。`providerForSettings` 把发起时快照中的术语表交给 `ApiTranslationProvider`；模型协议的单篇与批量请求经 `glossaryHits` 只取目标语言一致且原文出现的术语（拉丁字母或数字的一侧按整词、不区分大小写匹配），写入用户消息的 `glossary` 数组并在系统提示词追加说明；没有命中时请求与无术语表时一致。谷歌、百度、Apple 系统翻译与润色、纠错、解释不使用术语表。
 - 普通模型模式产生增量 Translation Update；语义模式在校验完成后一次发布译文和配对，避免向用户展示协议 JSON。
-- 语义模型与 Apple 系统翻译使用共享的 `translateParagraphs` 整片发送并建立双语配对，当前请求通过 `StreamIterator` 传播取消。非官方 Google、谷歌翻译、百度与未开双语对照的模型使用 `translateParagraphBatches`：按原文行切段（分隔符保留），按各服务上限装批（谷歌翻译 128 条/5000 字符，百度 2000 字符，其余 20 段/2000 字符）逐批调用批量接口，一次翻译共用一个 HTTP 连接，取消即断开；任一批失败或段落数对不上时整片失败，不处理后续批次。
+- 语义模型与 Apple 系统翻译使用共享的 `translateParagraphs` 整片发送并建立双语配对，当前请求通过 `StreamIterator` 传播取消。非官方 Google、谷歌翻译、百度与未开双语对照的模型使用 `translateParagraphBatches`：按原文行切段（分隔符保留），按各服务上限装批（谷歌翻译 128 条/5000 字符，百度 2000 字符，其余 20 段/2000 字符）逐批调用批量接口，一次翻译使用共享 HTTP 客户端，取消即中止当前批量请求；任一批失败或段落数对不上时整片失败，不处理后续批次。
 - 次要语言为空时，方向仍解析为有效的主要语言；检测语言等于目标语言时，翻译层直接返回原文及段落配对。
 
 ## 原生玻璃材料
@@ -105,6 +105,8 @@ AX 读取优先使用文本标记范围获取跨节点选区，再读取普通�
 用户展开录制目标时准备隐藏的采集界面，开始采集直接复用该引擎。采集控制条为非激活的 status-bar 层级面板，可出现在其他应用的全屏空间。视频结果使用普通层级的带标题栏 NSWindow，提供红黄绿按钮；AppKit将系统边框计入等比媒体和右侧纵向工具栏的整体边界。切换阶段时新建对应类型的原生窗口并转移同一 Flutter 内容。准备态在视图缩放前立即通知Flutter，以便同步缩放取得新画面；媒体结果在原生几何更新后通知，确保结果布局拥有足够空间。系统关闭、工具栏关闭与键盘关闭复用同一立即放弃路径，清理临时资源并保留已保存文件，内部窗口切换不触发用户关闭逻辑。保存与GIF/APNG/WebM导出的日期在操作开始时冻结，不弹路径确认。
 
 应用联合画布编码器将首个实际写入帧的时间固定为零，后续主机经过时间量化到 600 刻度，只写入严格递增的帧时间。首帧成功写入才确认录制就绪；无有效帧时结束明确失败，放弃直接取消写入。
+
+输入翻译通过系统日志 `subsystem=TranslateApp`、`category=Performance` 分段记录耗时（阶段名与毫秒，不含文本）：`input-read`（原生从开始采集到发出选区事件）、`input-first-token`（Dart 从发起翻译到首段非空译文）、`input-complete`（到翻译完整成功）、`input-replace`（`replaceSelection` 粘贴替换）；后三项由 `perfMark` 交原生写入。
 
 录制启动通过系统日志 `subsystem=TranslateApp`、`category=CaptureStartup` 记录界面同步工作、来源配置、系统流资源创建、异步启动及实际开始写入的耗时；仅包含固定步骤名和毫秒时长，不包含截图、窗口标题或文件路径。
 

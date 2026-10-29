@@ -277,6 +277,8 @@ final class SelectionMonitor {
         let pid = app.processIdentifier
         // 在原文采集开始时冻结来源名称，不在异步完成后重新按PID查询。
         let sourceAppName = app.localizedName
+        // 仅输入翻译记录“读取原文”阶段耗时：从开始采集到选区事件发出。
+        let inputReadStart: ContinuousClock.Instant? = gesture == .inputHotkey ? ContinuousClock.now : nil
         captureTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(for: .milliseconds(80)) } catch { return }
             // 读取绑定手势来源，切换应用或新手势会取消本次读取。
@@ -303,6 +305,7 @@ final class SelectionMonitor {
                 text: text, gesture: gesture.rawValue, x: anchor.x, y: anchor.y, sourcePID: pid, sourceAppName: sourceAppName,
                 inputAnchor: gesture == .inputHotkey ? AccessibilitySelection.inputAnchor(sourcePID: pid) : nil
             )
+            if let inputReadStart { PerformanceLog.record("input-read", since: inputReadStart) }
             // 选区通知覆盖程序清空与控件焦点变化，不需要轮询剪贴板。
             self?.watchSelection(sourcePID: pid, selectionElement: selection.element)
         }

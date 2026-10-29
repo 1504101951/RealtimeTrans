@@ -161,6 +161,8 @@ class SettingsController {
       credentials: () async => credentials,
       prompt: _current.prompts[TextMode.translate]!,
       thinking: _current.thinking[TextMode.translate]!,
+      // 与正式翻译一致，按待测配置的双语对照开关请求。
+      semanticPairs: config.semanticPairs,
     );
     final result = StringBuffer();
     var completed = false;

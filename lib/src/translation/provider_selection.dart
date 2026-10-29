@@ -14,13 +14,27 @@ BatchTranslationProvider providerForSettings(
   SettingsPlatform platform,
 ) => providerForService(settings, platform, settings.defaultServiceId);
 
+/// settings 与 platform 同上；返回输入翻译使用的默认服务 Provider。
+/// 输入翻译只需要替换文本，固定不使用双语段落对照，即使该服务在设置中开启了对照。
+BatchTranslationProvider providerForInput(
+  AppSettings settings,
+  SettingsPlatform platform,
+) => providerForService(
+  settings,
+  platform,
+  settings.defaultServiceId,
+  semanticPairs: false,
+);
+
 /// settings 为发起时的配置，platform 提供凭据读取，serviceId 为谷歌翻译或已配置服务的 id；
+/// semanticPairs 省略时取该服务配置的双语段落对照开关，输入翻译传 false 关闭；
 /// 返回该服务的翻译 Provider，凭据在请求前读取（#100 卡片服务菜单与默认服务共用）。
 BatchTranslationProvider providerForService(
   AppSettings settings,
   SettingsPlatform platform,
-  String serviceId,
-) {
+  String serviceId, {
+  bool? semanticPairs,
+}) {
   if (serviceId == ServiceConfig.builtinId) return UnofficialGoogleProvider();
   final config = settings.services.singleWhere(
     (service) => service.id == serviceId,
@@ -33,6 +47,7 @@ BatchTranslationProvider providerForService(
     credentials: () => platform.readCredentials(serviceId),
     prompt: settings.prompts[TextMode.translate]!,
     thinking: settings.thinking[TextMode.translate]!,
+    semanticPairs: semanticPairs ?? config.semanticPairs,
     glossary: settings.glossary,
   );
 }
@@ -69,6 +84,8 @@ TranslationProvider? assistProviderForService(
     mode: mode,
     prompt: settings.prompts[mode]!,
     thinking: settings.thinking[mode]!,
+    // 润色、纠错与解释不走段落对照。
+    semanticPairs: false,
   );
 }
 

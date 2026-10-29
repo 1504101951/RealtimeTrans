@@ -72,6 +72,7 @@ Future<void> _startApplication(MacosPlatformBridge bridge) async {
   // providerForSettings复用翻译模块的服务选择；SelectionSession拥有请求、重试和取消。
   final session = SelectionSession(
     provider: providerForSettings(initial, bridge),
+    inputProvider: providerForInput(initial, bridge),
     detectLanguage: bridge.detectLanguage,
     language: initial.direction,
     inputLanguage: initial.inputDirection,
@@ -97,6 +98,8 @@ Future<void> _startApplication(MacosPlatformBridge bridge) async {
       session.inputLanguage = candidate.inputDirection;
       // providerForSettings在下一次请求前按已提交配置读取对应服务凭据。
       session.provider = providerForSettings(candidate, bridge);
+      // 输入翻译服务不使用双语段落对照，同样只影响下一次翻译。
+      session.inputProvider = providerForInput(candidate, bridge);
       // 实时翻译之后发送的批次使用新配置，不重译画面上未变化的段落块。
       live.noteSettings(candidate);
     },

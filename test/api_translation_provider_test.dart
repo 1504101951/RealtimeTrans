@@ -5,9 +5,12 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:translate_app/src/common/constants/text_mode.dart';
+import 'package:translate_app/src/platform/settings_platform.dart';
+import 'package:translate_app/src/settings/app_settings.dart';
 import 'package:translate_app/src/settings/service_config.dart';
 import 'package:translate_app/src/translation/glossary.dart';
 import 'package:translate_app/src/translation/model_result.dart';
+import 'package:translate_app/src/translation/provider_selection.dart';
 import 'package:translate_app/src/translation/providers/api_translation_provider.dart';
 import 'package:translate_app/src/translation/translation_types.dart';
 
@@ -36,6 +39,7 @@ void main() {
       semanticPairs: semantic,
     ),
     credentials: () async => secrets,
+    semanticPairs: semantic,
     glossary: glossary,
     prompt: defaultPrompts[TextMode.translate]!,
     thinking: false,
@@ -207,6 +211,7 @@ void main() {
         credentials: () async => const {},
         prompt: defaultPrompts[TextMode.translate]!,
         thinking: false,
+        semanticPairs: false,
       ).translate(request).toList();
       if (kind == 'google') {
         expect(
@@ -292,6 +297,7 @@ void main() {
       credentials: () async => secrets,
       prompt: defaultPrompts[TextMode.translate]!,
       thinking: false,
+      semanticPairs: false,
     );
     final events = <TranslationEvent>[];
     final subscription = active.translate(request).listen(events.add);
@@ -305,6 +311,7 @@ void main() {
       credentials: () => secret.future,
       prompt: defaultPrompts[TextMode.translate]!,
       thinking: false,
+      semanticPairs: false,
     ).translate(request).listen(events.add);
     await pending.cancel();
     secret.complete(secrets);
@@ -395,6 +402,7 @@ void main() {
               mode: TextMode.polish,
               prompt: '自定义润色提示词',
               thinking: false,
+              semanticPairs: true,
             )
             .translate(
               const TranslationRequest(
@@ -469,6 +477,54 @@ void main() {
     await serving;
   });
 
+  test('输入翻译的 Provider 不使用双语段落对照，默认翻译 Provider 仍使用', () async {
+    // 边界：默认服务是开启双语段落对照的模型服务；同一配置经 providerForSettings 请求要求 segments JSON，
+    // 经 providerForInput 请求按普通段落协议（无 segments 指令，原文按“[编号] 原文”行传入）。
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    final bodies = <Map<String, Object?>>[];
+    final serving = server.listen((incoming) async {
+      bodies.add(
+        jsonDecode(await utf8.decoder.bind(incoming).join())
+            as Map<String, Object?>,
+      );
+      incoming.response.write(
+        'data: {"choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+      );
+      await incoming.response.close();
+    });
+    addTearDown(serving.cancel);
+    final settings = AppSettings(
+      primaryLanguage: 'zh-CN',
+      defaultServiceId: 'semantic',
+      services: [
+        ServiceConfig(
+          id: 'semantic',
+          kind: 'openai',
+          name: 'Semantic',
+          baseUrl: 'http://127.0.0.1:${server.port}',
+          model: 'test-model',
+          semanticPairs: true,
+        ),
+      ],
+    );
+    const single = TranslationRequest(
+      sourceText: 'Hello',
+      detectedLanguage: 'en',
+      targetLanguage: 'zh-CN',
+    );
+    final platform = _SecretPlatform();
+    await providerForSettings(settings, platform).translate(single).toList();
+    await providerForInput(settings, platform).translate(single).toList();
+    final defaultBody = jsonEncode(bodies[0]);
+    final inputBody = jsonEncode(bodies[1]);
+    expect(defaultBody, contains('segments'));
+    expect(defaultBody, contains(r'{\"id\":0'));
+    expect(inputBody, isNot(contains('segments')));
+    // 普通段落协议按“[编号] 原文”行传入。
+    expect(inputBody, contains('[1] Hello'));
+  });
+
   /// kind/baseUrl 指定协议与地址（baseUrl 为空时用 server 本地地址），thinking 为思考开关，maxOutputTokens 为最大输出；
   /// 向 server 发一次翻译并返回服务端收到的请求体 JSON，及客户端得到的全部事件。
   Future<(Map<String, Object?>?, List<TranslationEvent>)> sendOnce(
@@ -504,6 +560,7 @@ void main() {
       prompt: defaultPrompts[TextMode.polish]!,
       mode: TextMode.polish,
       thinking: thinking,
+      semanticPairs: false,
     ).translate(request).toList();
     return (received, events);
   }
@@ -851,4 +908,21 @@ void main() {
       {'term': 'Kubernetes', 'translation': 'Kubernetes'},
     ]);
   });
+}
+
+/// 只提供固定凭据的设置平台，供 Provider 选择测试读取密钥；不保存任何设置。
+class _SecretPlatform implements SettingsPlatform {
+  @override
+  Future<void> applySettings(
+    Map<String, Object> settings, {
+    Map<String, Map<String, String>?> credentials = const {},
+  }) async {}
+
+  @override
+  Future<Map<String, String>> readCredentials(String id) async => const {
+    'apiKey': 'test-secret',
+  };
+
+  @override
+  Future<List<String>> credentialIds(List<String> ids) async => const [];
 }

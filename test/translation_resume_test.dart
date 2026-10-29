@@ -63,6 +63,7 @@ void main() {
       credentials: () async => {'apiKey': 'local-test'},
       prompt: defaultPrompts[TextMode.translate]!,
       thinking: false,
+      semanticPairs: false,
     );
     final session = SelectionSession(
       provider: provider,

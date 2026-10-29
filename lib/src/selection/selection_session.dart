@@ -12,15 +12,17 @@ import '../translation/translation_types.dart';
 
 /// Dart 侧选区会话。激活前不请求翻译服务。
 class SelectionSession extends ChangeNotifier {
-  /// provider/detectLanguage/language 为默认服务、设备语言识别与全局翻译方向；inputLanguage 为输入翻译方向，
-  /// 省略时与 language 相同；lookupDefinition 查询词典释义，省略时不查词典。
+  /// provider/detectLanguage/language 为默认服务、设备语言识别与全局翻译方向；inputLanguage/inputProvider 为输入翻译方向与服务，
+  /// 省略时分别与 language、provider 相同；lookupDefinition 查询词典释义，省略时不查词典。
   SelectionSession({
     required this.provider,
     required this.detectLanguage,
     LanguageDirection? language,
     LanguageDirection? inputLanguage,
+    TranslationProvider? inputProvider,
     Future<String?> Function(String text)? lookupDefinition,
-  }) : language = language ?? LanguageDirection.systemDefault(),
+  }) : inputProvider = inputProvider ?? provider,
+       language = language ?? LanguageDirection.systemDefault(),
        inputLanguage =
            inputLanguage ?? language ?? LanguageDirection.systemDefault(),
        lookupDefinition = lookupDefinition ?? _noDefinition;
@@ -51,6 +53,9 @@ class SelectionSession extends ChangeNotifier {
 
   /// 输入翻译快捷键使用的语言方向，与全局翻译隔离（#99）。
   LanguageDirection inputLanguage;
+
+  /// 输入翻译快捷键使用的服务，与 provider 同为默认服务但不使用双语段落对照。
+  TranslationProvider inputProvider;
 
   /// 当前会话是否由输入翻译快捷键发起；激活时据此选择语言方向（#99）。
   bool _input = false;
@@ -164,7 +169,8 @@ class SelectionSession extends ChangeNotifier {
     if (snapshot.phase != TranslationPhase.trigger) return;
 
     final generation = _generation;
-    final activeProvider = _activeProvider = provider;
+    // 输入翻译使用不含段落对照的服务，其余入口使用默认服务。
+    final activeProvider = _activeProvider = _input ? inputProvider : provider;
     // 输入翻译使用独立的语言方向，其余入口使用全局翻译方向（#99）。
     final activeLanguage = _activeLanguage = _input ? inputLanguage : language;
     var source = snapshot.sourceText;

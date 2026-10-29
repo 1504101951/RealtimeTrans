@@ -1,8 +1,7 @@
 import 'dart:async';
-import 'dart:io';
 
-import '../common/constants/network_limits.dart';
 import 'language_direction.dart';
+import 'translation_http.dart';
 import 'translation_types.dart';
 
 /// translate 处理一次服务请求；request 提供文本与方向；返回可取消的配对译文流。
@@ -116,7 +115,7 @@ Stream<TranslationEvent> translateParagraphs(
 }
 
 /// provider 为支持批量的服务，request 为一片原文与方向，maxItems/maxChars 为单次批量请求的段落数与字符数上限（maxItems 为空时只按字符数）；
-/// 按原文行切成段落，同语言直通，其余按阅读顺序装成批次逐批请求，一次翻译共用一个 HTTP 连接（#113）。
+/// 按原文行切成段落，同语言直通，其余按阅读顺序装成批次逐批请求，一次翻译使用应用共享的 HTTP 客户端（#113）。
 /// 返回按原文顺序的分隔符与译文增量，以及覆盖完整原文的段落配对；任一批失败、或有段落没有译文（段落数对不上）时整片失败。
 Stream<TranslationEvent> translateParagraphBatches(
   BatchTranslationProvider provider,
@@ -125,14 +124,12 @@ Stream<TranslationEvent> translateParagraphBatches(
   required int maxChars,
 }) {
   StreamSubscription<BatchTranslationEvent>? current;
-  HttpClient? client;
   var cancelled = false;
   late StreamController<TranslationEvent> output;
   output = StreamController<TranslationEvent>(
     onCancel: () {
       cancelled = true;
-      // 取消即断开本次连接，未返回的批量请求立即结束。
-      client?.close(force: true);
+      // 取消订阅即中止当前批量请求；共享客户端保持打开。
       return current?.cancel();
     },
     onListen: () async {
@@ -167,8 +164,6 @@ Stream<TranslationEvent> translateParagraphBatches(
             publish(index, match.group(0)!);
           }
         } else {
-          client = HttpClient()
-            ..connectionTimeout = NetworkLimits.connectionTimeout;
           var start = 0;
           while (start < paragraphs.length) {
             // 按阅读顺序装满一批：段落数与字符数先到为准，单段超过字符上限时自成一批。
@@ -203,7 +198,7 @@ Stream<TranslationEvent> translateParagraphBatches(
                     previousSourceTail: request.previousSourceTail,
                     previousTranslationTail: request.previousTranslationTail,
                   ),
-                  client: client!,
+                  client: translationHttpClient,
                 )
                 .listen(
                   (event) {
@@ -255,7 +250,6 @@ Stream<TranslationEvent> translateParagraphBatches(
         if (!cancelled) output.addError(error, stack);
       } finally {
         await current?.cancel();
-        client?.close(force: true);
         await output.close();
       }
     },
