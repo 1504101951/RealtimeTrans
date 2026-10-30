@@ -180,8 +180,8 @@ enum ScreenCaptureService {
         return configuration
     }
 
-    /// png 为截图像素；返回 OCR Markdown（块之间空一行），无字返回空字符串。截图编辑「识别文字」与 MCP 共用（#96）。
-    static func recognizeText(png: Data) async throws -> String {
+    /// png 为截图 PNG；解码为位图，供文字识别与二维码识别共用同一份图像（#68），无法解码时抛出错误。
+    static func decodeImage(png: Data) throws -> CGImage {
         guard let image = NSBitmapImageRep(data: png)?.cgImage else {
             throw NSError(
                 domain: AppConstants.errorDomain,
@@ -189,19 +189,17 @@ enum ScreenCaptureService {
                 userInfo: [NSLocalizedDescriptionKey: "无法读取截图以识别文字。"]
             )
         }
-        return try await recognizeDocument(image: image).map(\.markdown).joined(separator: "\n\n")
+        return image
     }
 
-    /// png 为截图像素；返回画面中带文字内容的二维码与条码，结构为 {symbology, payload}（symbology 为 Vision 类型名，如 qr、ean13）。
+    /// image 为已解码的截图；返回 OCR Markdown（块之间空一行），无字返回空字符串（#96）。
+    static func recognizeText(image: CGImage) async throws -> String {
+        try await recognizeDocument(image: image).map(\.markdown).joined(separator: "\n\n")
+    }
+
+    /// image 为已解码的截图；返回画面中带文字内容的二维码与条码，结构为 {symbology, payload}（symbology 为 Vision 类型名，如 qr、ean13）。
     /// 按位置自上而下、自左向右排序，类型与内容都相同的码只保留一个；无码返回空数组（#108）。
-    static func detectCodes(png: Data) async throws -> [[String: String]] {
-        guard let image = NSBitmapImageRep(data: png)?.cgImage else {
-            throw NSError(
-                domain: AppConstants.errorDomain,
-                code: 13,
-                userInfo: [NSLocalizedDescriptionKey: "无法读取截图以识别文字。"]
-            )
-        }
+    static func detectCodes(image: CGImage) async throws -> [[String: String]] {
         let observations = try await DetectBarcodesRequest().perform(on: image)
         // 归一化坐标原点在左下：上边越高越靠前，同一高度再按左边缘。
         let ordered = observations.sorted { first, second in

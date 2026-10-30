@@ -505,9 +505,11 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             // recognizeText 输出 OCR Markdown，detectCodes 输出二维码与条码；Vision 均为异步接口（#108）。
             Task { @MainActor in
                 do {
-                    let text = try await ScreenCaptureService.recognizeText(png: payload)
-                    let codes = try await ScreenCaptureService.detectCodes(png: payload)
-                    result(["text": text, "codes": codes])
+                    // 合成图只在后台解码一次，两个识别并行执行，都完成后一起返回（#68）。
+                    let image = try await Task.detached { try ScreenCaptureService.decodeImage(png: payload) }.value
+                    async let text = ScreenCaptureService.recognizeText(image: image)
+                    async let codes = ScreenCaptureService.detectCodes(image: image)
+                    result(["text": try await text, "codes": try await codes])
                 } catch {
                     result(FlutterError(code: AppConstants.ocrFailedError, message: error.localizedDescription, details: nil))
                 }

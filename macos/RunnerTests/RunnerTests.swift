@@ -1071,7 +1071,7 @@ class RunnerTests: XCTestCase {
         let tiff = try XCTUnwrap(image.tiffRepresentation)
         let bitmap = try XCTUnwrap(NSBitmapImageRep(data: tiff))
         let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-        let recognized = try await ScreenCaptureService.recognizeText(png: png)
+        let recognized = try await ScreenCaptureService.recognizeText(image: ScreenCaptureService.decodeImage(png: png))
         XCTAssertTrue(recognized.contains("HelloOCR"), recognized)
         let blocks = try ScreenCaptureService.recognizeBlocks(png: png)
         XCTAssertFalse(blocks.isEmpty)
@@ -1086,7 +1086,7 @@ class RunnerTests: XCTestCase {
         let blankTiff = try XCTUnwrap(blank.tiffRepresentation)
         let blankBitmap = try XCTUnwrap(NSBitmapImageRep(data: blankTiff))
         let blankPng = try XCTUnwrap(blankBitmap.representation(using: .png, properties: [:]))
-        let empty = try await ScreenCaptureService.recognizeText(png: blankPng)
+        let empty = try await ScreenCaptureService.recognizeText(image: ScreenCaptureService.decodeImage(png: blankPng))
         XCTAssertTrue(empty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
@@ -1119,13 +1119,13 @@ class RunnerTests: XCTestCase {
         context.draw(bar, in: CGRect(x: 40, y: 40, width: bar.width, height: bar.height))
         let image = try XCTUnwrap(context.makeImage())
         let png = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
-        let codes = try await ScreenCaptureService.detectCodes(png: png)
+        let codes = try await ScreenCaptureService.detectCodes(image: ScreenCaptureService.decodeImage(png: png))
         XCTAssertEqual(codes, [
             ["symbology": "qr", "payload": link],
             ["symbology": "code128", "payload": "TRANSLATE-108"],
         ])
         let blank = try screenshotFixture(width: 64, height: 64, color: .white)
-        let none = try await ScreenCaptureService.detectCodes(png: blank)
+        let none = try await ScreenCaptureService.detectCodes(image: ScreenCaptureService.decodeImage(png: blank))
         XCTAssertEqual(none, [])
     }
 
