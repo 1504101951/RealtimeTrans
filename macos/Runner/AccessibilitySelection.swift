@@ -349,6 +349,40 @@ enum AccessibilitySelection {
         return NSRect(x: rect.minX, y: height - rect.maxY, width: rect.width, height: rect.height)
     }
 
+    /// sourcePID 为来源进程；确定输入翻译的粘贴目标：焦点已是可写入的文本输入控件时直接返回 true；
+    /// 否则（如在只读回复中选中文字）在来源应用当前窗口内查找可写入的文本输入控件，恰好一个时将焦点设到它上面，
+    /// 等待 inputTargetFocusDelay 让来源应用完成聚焦后返回 true；找到 0 个、多个或无法聚焦时返回 false。
+    /// 已知限制：只遍历前 inputTargetSearchMaxNodes 个节点、深度不超过 inputTargetSearchMaxDepth，超出部分的输入框视为不存在；
+    /// 出现输入框位于超大窗口树深处而找不到的应用时重新评估上限。
+    static func focusWritableInput(sourcePID: pid_t) async -> Bool {
+        let app = AXUIElementCreateApplication(sourcePID)
+        if let focused = focusedElement(from: app), isWritableInput(focused) { return true }
+        guard let window = axElement(attribute(app, kAXFocusedWindowAttribute as CFString)) else { return false }
+        // 广度优先遍历窗口树，找到第二个候选即可判定为多个、提前结束。
+        var queue: [(element: AXUIElement, depth: Int)] = [(window, 0)]
+        var index = 0
+        var found: [AXUIElement] = []
+        while index < queue.count, index < AppConstants.inputTargetSearchMaxNodes, found.count < 2 {
+            let (element, depth) = queue[index]
+            index += 1
+            if isWritableInput(element) { found.append(element); continue }
+            guard depth < AppConstants.inputTargetSearchMaxDepth,
+                  let children = attribute(element, kAXChildrenAttribute as CFString) as? [AXUIElement] else { continue }
+            queue.append(contentsOf: children.map { ($0, depth + 1) })
+        }
+        guard found.count == 1,
+              AXUIElementSetAttributeValue(found[0], kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success else { return false }
+        try? await Task.sleep(for: AppConstants.inputTargetFocusDelay)
+        return true
+    }
+
+    /// element 为 AX 节点；返回它是否为可写入的文本输入控件：角色属于 axTextInputRoles、非安全输入且值可写。
+    private static func isWritableInput(_ element: AXUIElement) -> Bool {
+        guard let role = role(of: element), AppConstants.axTextInputRoles.contains(role), !isSecure(element) else { return false }
+        var settable: DarwinBoolean = false
+        return AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success && settable.boolValue
+    }
+
     /// sourcePID 为来源进程；焦点为非安全的文本输入控件且未开启安全输入时发送 Command-A，返回是否已全选。
     /// 只在输入翻译读不到选区时调用，非文本控件不发送，避免全选文件列表等其他内容。
     static func selectAllInFocusedTextInput(sourcePID: pid_t) -> Bool {
@@ -356,7 +390,7 @@ enum AccessibilitySelection {
               let focused = focusedElement(from: AXUIElementCreateApplication(sourcePID)),
               !isSecure(focused),
               let role = role(of: focused),
-              ["AXTextField", "AXTextArea", "AXComboBox"].contains(role) else { return false }
+              AppConstants.axTextInputRoles.contains(role) else { return false }
         postCommandKey(0x00)
         return true
     }

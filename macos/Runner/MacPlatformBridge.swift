@@ -214,6 +214,10 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             // 通过校验即将粘贴：收起进行中浮标，避免遮挡或在粘贴后才迟到出现（#67）。
             MainActor.assumeIsolated { InputStatusBubble.shared.closeProgress() }
             Task { @MainActor in
+                // focusWritableInput 确定粘贴目标：焦点不在输入框时聚焦来源窗口内唯一的可写入输入框，0 个或多个则不粘贴（#1）。
+                guard await AccessibilitySelection.focusWritableInput(sourcePID: pid) else {
+                    result("没有可写入的输入框，未替换原文。"); return
+                }
                 // pasteReplacingSelection 经剪贴板粘贴，并在来源应用读取后还原原剪贴板。
                 let pasted = await AccessibilitySelection.pasteReplacingSelection(text, pasteboard: .general, paste: AccessibilitySelection.postPasteKey)
                 result(pasted ? nil : "无法写入剪贴板，未替换原文。")

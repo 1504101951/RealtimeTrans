@@ -260,6 +260,12 @@ enum AppConstants {
     static let inputProgressPaddingX: CGFloat = 10
     static let inputProgressSpinnerSize: CGFloat = 12
     static let inputProgressSpacing: CGFloat = 6
+    /// 输入翻译视为文本输入控件的 AX 角色：读不到选区时的全选范围与粘贴目标查找共用。
+    static let axTextInputRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox"]
+    /// 输入翻译粘贴目标查找（#1）：焦点不在输入控件时遍历来源窗口的节点数与深度上限，聚焦目标后等待来源应用完成聚焦的时长。
+    static let inputTargetSearchMaxNodes = 2000
+    static let inputTargetSearchMaxDepth = 40
+    static let inputTargetFocusDelay = Duration.milliseconds(80)
     /// 输入翻译粘贴后等待来源应用读取剪贴板的时长，之后才还原原剪贴板（#99）。
     static let pasteRestoreDelay = Duration.milliseconds(500)
     static let revealFileMethod = "revealFile"
