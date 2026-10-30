@@ -253,6 +253,29 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         captureId == id
     }
 
+    /// payload 为导出图 PNG；写入系统剪贴板，返回是否写入成功。
+    private func writePNG(_ payload: Data) -> Bool {
+        let item = NSPasteboardItem()
+        item.setData(payload, forType: .png)
+        pasteboard.clearContents()
+        return pasteboard.writeObjects([item])
+    }
+
+    /// id 为本次截图身份，payload 为导出成功的 PNG；先向主引擎查询「记录截图历史」开关（不带图片），
+    /// 开启时才把图片与截图时间交主引擎写入，关闭时整图不跨引擎；不等待写入结果，无返回值（#68）。
+    private func recordHistory(id: String, payload: Data) {
+        // 截图时间在发起时取值，贴图随后关闭编辑层也不影响本次记录。
+        let arguments: [String: Any] = [
+            "id": id, "bytes": FlutterStandardTypedData(bytes: payload), "capturedAt": capturedAt,
+        ]
+        MacPlatformBridge.Shared.instance?.requestApplication(AppConstants.screenshotHistoryRecordingMethod) { enabled in
+            guard enabled as? Bool == true else { return }
+            MacPlatformBridge.Shared.instance?.requestApplication(
+                AppConstants.recordScreenshotHistoryMethod, arguments: arguments
+            ) { _ in }
+        }
+    }
+
     /// 无参数；返回当前截图和保存目录，源图以 BGRA 原始字节（pixels、rowBytes）下发。
     private func snapshot() -> [String: Any] {
         var value: [String: Any] = [
@@ -509,14 +532,6 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             result(nil)
-        case AppConstants.recordScreenshotHistoryMethod:
-            guard let id = args["id"] as? String, id == captureId else {
-                result(Self.staleCaptureFailure); return
-            }
-            // 主 Dart 引擎持有历史数据库，按开关决定是否写入。
-            MacPlatformBridge.Shared.instance?.requestApplication(
-                AppConstants.recordScreenshotHistoryMethod, arguments: args, result: result
-            )
         case AppConstants.translatePlainTextMethod:
             guard let id = args["id"] as? String, id == captureId else {
                 result(Self.staleCaptureFailure); return
@@ -556,13 +571,13 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             switch call.method {
             case AppConstants.copyScreenshotMethod:
                 defer { PerformanceLog.record("export-copy", since: exportStart) }
-                let item = NSPasteboardItem()
-                item.setData(payload, forType: .png)
-                pasteboard.clearContents()
-                guard pasteboard.writeObjects([item]) else {
+                // writePNG 把导出图写入系统剪贴板。
+                guard writePNG(payload) else {
                     result(FlutterError(code: AppConstants.copyFailedError, message: "无法复制截图，请重试。", details: nil))
                     return
                 }
+                // recordHistory 按「记录截图历史」开关把导出图交主引擎记录。
+                recordHistory(id: id, payload: payload)
                 result(nil)
             case AppConstants.saveScreenshotMethod:
                 defer { PerformanceLog.record("export-save", since: exportStart) }
@@ -573,6 +588,12 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
                         basePath: UserDefaults.standard.string(forKey: AppConstants.screenshotSaveDirectoryKey),
                         category: .screenshot)
                     let url = try ScreenshotStorage.save(payload, directory: directory, name: name)
+                    // 复制并保存在保存成功后写剪贴板，图片只经通道传一次；复制失败时已保存的文件保留（#68）。
+                    if args["copy"] as? Bool == true, !writePNG(payload) {
+                        result(FlutterError(code: AppConstants.copyFailedError, message: "无法复制截图，请重试。", details: nil))
+                        return
+                    }
+                    recordHistory(id: id, payload: payload)
                     result(url.path)
                 } catch {
                     result(FlutterError(code: AppConstants.saveFailedError, message: error.localizedDescription, details: nil))
@@ -587,6 +608,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
                     png: payload,
                     origin: NSPoint(x: x.doubleValue, y: y.doubleValue)
                 )
+                recordHistory(id: id, payload: payload)
                 result(pinId)
             default:
                 result(FlutterMethodNotImplemented)

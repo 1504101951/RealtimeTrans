@@ -294,11 +294,13 @@ enum AppConstants {
     static let showOverlayMethod = "showOverlay"
     static let staleCaptureError = "stale_capture"
     static let systemStatusMethod = "systemStatus"
-    /// recordScreenshotHistory 协议值；截图导出成功后转发主引擎记录，与Dart常量同步。
+    /// recordScreenshotHistory 协议值；截图导出成功且开关开启时原生请求主引擎记录，与Dart常量同步。
     static let recordScreenshotHistoryMethod = "recordScreenshotHistory"
     /// stitchScreenshots 协议值；按顺序拼接截图历史图片（#109），与Dart常量同步。
     static let stitchScreenshotsMethod = "stitchScreenshots"
     /// splitScreenshot 协议值；按高度等分一张截图历史图片（#109），与Dart常量同步。
+    /// screenshotHistoryRecording 协议值；原生导出成功后向主引擎查询「记录截图历史」开关，与Dart常量同步。
+    static let screenshotHistoryRecordingMethod = "screenshotHistoryRecording"
     static let splitScreenshotMethod = "splitScreenshot"
     /// compareScreenshots 协议值；逐像素比较两张截图历史图片（#109），与Dart常量同步。
     static let compareScreenshotsMethod = "compareScreenshots"

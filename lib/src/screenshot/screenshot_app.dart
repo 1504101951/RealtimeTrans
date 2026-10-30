@@ -1000,7 +1000,8 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
     }
   }
 
-  /// action 为 copy/save/pin/copySave（先保存再复制）；先在 Dart 合成 PNG，再把 bytes 交给原生，无返回值。
+  /// action 为 copy/save/pin/copySave（先保存再复制）；先在 Dart 合成 PNG，再把 bytes 交给原生一次，
+  /// 原生完成保存、复制、贴图与截图历史记录（#68），无返回值。
   Future<void> _export(String action, {bool closeAfterCopy = false}) async {
     final id = _capture['id'];
     if (id == null || !_document.hasImage || _busy) return;
@@ -1025,6 +1026,8 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           {
             'id': id,
             'bytes': bytes,
+            // 复制并保存由原生在保存成功后写剪贴板，图片只传一次（#68）。
+            'copy': action == 'copySave',
             'name': screenshotFilename(
               DateTime.fromMillisecondsSinceEpoch(
                 _capture['capturedAt'] as int,
@@ -1038,11 +1041,8 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           _savedPath = saved;
           _message = '已保存截图';
         });
-        // 复制并保存在保存成功后继续走复制与关闭（#111）。
-        if (action == 'save') {
-          _afterExport(id, bytes);
-          return;
-        }
+        // 复制并保存在保存成功后继续走复制反馈与关闭（#111）。
+        if (action == 'save') return;
       }
       if (action == 'pin') {
         final origin = pinOriginAppKit(
@@ -1067,18 +1067,18 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           });
           return;
         }
-        // 先发出导出后的记录再结束编辑层；原生按到达顺序先核对截图身份，关闭后身份失效。
-        _afterExport(id, bytes);
         // 贴图成功即结束编辑层，只留下独立置顶图。
         await widget.channel.invokeMethod<void>(MethodNames.closeScreenshot);
         return;
       }
-      await widget.channel.invokeMethod<void>(MethodNames.copyScreenshot, {
-        'id': id,
-        'bytes': bytes,
-      });
-      if (!mounted || _capture['id'] != id) return;
-      _afterExport(id, bytes);
+      // 复制并保存已由原生写入剪贴板；只有单独复制才再交一次图片。
+      if (action == 'copy') {
+        await widget.channel.invokeMethod<void>(MethodNames.copyScreenshot, {
+          'id': id,
+          'bytes': bytes,
+        });
+        if (!mounted || _capture['id'] != id) return;
+      }
       // 只在系统剪贴板写入成功后展示反馈；新的成功操作重新计时。
       _showCopyFeedback('已复制图片');
       if (closeAfterCopy) {
@@ -1145,18 +1145,6 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       'text': hex,
     });
     if (mounted) _showCopyFeedback('已复制 $hex');
-  }
-
-  /// id 为本次截图身份，bytes 为刚导出成功的图片；请求主引擎按「记录截图历史」开关写入（#29），无返回值。
-  /// 这是导出成功后的附带记录：不等待回复，复制、保存、贴图的反馈与关闭不受其影响。
-  void _afterExport(Object id, Uint8List bytes) {
-    unawaited(
-      widget.channel.invokeMethod<void>(MethodNames.recordScreenshotHistory, {
-        'id': id,
-        'bytes': bytes,
-        'capturedAt': _capture['capturedAt'],
-      }),
-    );
   }
 
   /// method 为非导出系统操作；关闭/重截/授权不改剪贴板，无返回值。

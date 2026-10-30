@@ -182,7 +182,7 @@ abstract final class MethodNames {
 
   static const systemStatus = 'systemStatus';
 
-  /// 截图窗口在导出成功后请求主引擎记录截图历史；参数 id、bytes、capturedAt（#29）。
+  /// 原生在截图导出成功且开关开启时请求主引擎记录截图历史；参数 id、bytes、capturedAt（#29、#68）。
   static const recordScreenshotHistory = 'recordScreenshotHistory';
 
   /// 历史窗口读取截图历史；返回按截图时间倒序的条目列表。
@@ -194,7 +194,7 @@ abstract final class MethodNames {
   /// 历史窗口清空截图历史及其图片。
   static const clearScreenshotHistory = 'clearScreenshotHistory';
 
-  /// 读取「记录截图历史」开关。
+  /// 读取「记录截图历史」开关；历史窗口与原生截图导出共用。
   static const screenshotHistoryRecording = 'screenshotHistoryRecording';
 
   /// 设置「记录截图历史」开关；参数 enabled。

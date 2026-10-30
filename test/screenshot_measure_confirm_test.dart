@@ -60,9 +60,9 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
   });
 
-  testWidgets('确认截图按设置执行：复制并保存先保存再复制并关闭，改为复制图片后只复制并关闭', (tester) async {
-    // 边界：快照中的 screenshotConfirmAction 为 copyAndSave 时，确认依次发出保存、复制、关闭；
-    // 工具栏变更通知把动作改为 copy 后，再次确认只新增复制与关闭，保存次数仍为 1。
+  testWidgets('确认截图按设置执行：复制并保存只发一次带复制标记的保存并关闭，改为复制图片后只复制并关闭', (tester) async {
+    // 边界：快照中的 screenshotConfirmAction 为 copyAndSave 时，确认只发出保存（copy: true，图片只传一次）与关闭，
+    // 不再单独发出复制（#68）；工具栏变更通知把动作改为 copy 后，再次确认只新增复制与关闭，保存次数仍为 1。
     final editor = await _pumpEditor(
       tester,
       'test/confirm-action',
@@ -91,12 +91,9 @@ void main() {
           MethodNames.closeScreenshot,
         }.contains(method),
       ),
-      [
-        MethodNames.saveScreenshot,
-        MethodNames.copyScreenshot,
-        MethodNames.closeScreenshot,
-      ],
+      [MethodNames.saveScreenshot, MethodNames.closeScreenshot],
     );
+    expect(editor.copies, hasLength(1));
 
     await messenger.handlePlatformMessage(
       editor.channel.name,
@@ -131,7 +128,7 @@ Future<void> _settle(WidgetTester tester) async {
   }
 }
 
-/// 截图编辑测试通道：方法调用顺序、复制图片与复制文字。
+/// 截图编辑测试通道：方法调用顺序、复制图片（含复制并保存）与复制文字。
 typedef _Editor = ({
   MethodChannel channel,
   List<String> calls,
@@ -179,6 +176,8 @@ Future<_Editor> _pumpEditor(
       case MethodNames.copyScreenshot:
         copies.add(arguments!['bytes'] as Uint8List);
       case MethodNames.saveScreenshot:
+        // 复制并保存由原生在保存成功后复制，带 copy 标记的保存同样计入复制。
+        if (arguments!['copy'] == true) copies.add(arguments['bytes'] as Uint8List);
         return '/tmp/截图.png';
       case MethodNames.copyText:
         texts.add(arguments!['text'] as String);

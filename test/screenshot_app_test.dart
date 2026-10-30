@@ -12,11 +12,9 @@ import 'package:translate_app/src/common/constants/emoji_catalog.dart';
 import 'package:translate_app/src/common/constants/screenshot_actions.dart';
 import 'package:translate_app/src/common/constants/preference_keys.dart';
 import 'package:translate_app/src/common/widgets/native_glass.dart';
-import 'package:sqlite3/sqlite3.dart';
 import 'package:translate_app/src/common/constants/screenshot_enums.dart';
 import 'package:translate_app/src/common/utils/geometry.dart';
 import 'package:translate_app/src/common/utils/screenshot_filename.dart';
-import 'package:translate_app/src/history/screenshot_history.dart';
 import 'package:translate_app/src/screenshot/edit_document.dart';
 import 'package:translate_app/src/screenshot/recognized_text_panel.dart';
 import 'package:translate_app/src/screenshot/screenshot_app.dart';
@@ -1123,24 +1121,16 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('美化行选择背景后复制输出扩出内边距的图片，贴图仍是原图，切换工具收起美化行；截图历史保留最后一次导出', (
+  testWidgets('美化行选择背景后复制输出扩出内边距的图片，贴图仍是原图，切换工具收起美化行', (
     tester,
   ) async {
     // 边界：倍率 1、默认内边距 64pt，64px 原图复制后为 192px；贴图不受美化影响。
-    // 截图历史：同一截图先复制后贴图，只保留一条，尺寸为最后一次导出的 64px。
     tester.view.physicalSize = const Size(900, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final bytes = await tester.runAsync(() => _solidPng(64, 64, _blue));
     final capture = await tester.runAsync(() => capturePixels(bytes!));
-    // 主引擎的真实截图历史：内存数据库加临时目录，开启记录。
-    final directory = Directory.systemTemp.createTempSync('screenshot-app-');
-    addTearDown(() => directory.deleteSync(recursive: true));
-    final history = ScreenshotHistoryStore(
-      sqlite3.openInMemory(),
-      Directory('${directory.path}/ScreenshotHistory'),
-    )..recordingEnabled = true;
     const channel = MethodChannel('test/screenshot-beautify');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -1168,9 +1158,6 @@ void main() {
         case MethodNames.pinScreenshot:
           pinned = (call.arguments as Map)['bytes'] as Uint8List;
           return 'pin-beautify';
-        case MethodNames.recordScreenshotHistory:
-          // 主引擎同样以当前时间处理截图窗口的记录请求。
-          return handleScreenshotHistoryRequest(history, call, 1788662400000);
         default:
           return null;
       }
@@ -1223,9 +1210,6 @@ void main() {
     });
     expect((image!.width, image.height), (192, 192));
     image.dispose();
-    expect(history.list().map((record) => (record.width, record.height)), [
-      (192, 192),
-    ]);
 
     // 切换工具收起美化行，已选美化仍生效。
     await tester.ensureVisible(find.byKey(const Key('screenshot-tool-rect')));
@@ -1240,9 +1224,6 @@ void main() {
     });
     expect((pin!.width, pin.height), (64, 64));
     pin.dispose();
-    expect(history.list().map((record) => (record.width, record.height)), [
-      (64, 64),
-    ]);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 400));
   });
