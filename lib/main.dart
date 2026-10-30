@@ -52,7 +52,9 @@ Future<void> _startApplication(MacosPlatformBridge bridge) async {
   final support = await bridge.applicationSupportPath();
   Directory(support).createSync(recursive: true);
   // 翻译历史与生词本共用同一个 SQLite 文件。
-  final database = sqlite3.open('$support/translation_history.sqlite');
+  final database = sqlite3.open('$support/translation_history.sqlite')
+    // WAL 日志模式：写入只追加日志，减少每次提交的同步写盘（#68）。
+    ..execute('PRAGMA journal_mode=WAL');
   unawaited(bridge.perfMark('launch-dart-database', stage));
   final history = TranslationHistoryStore(
     database,
