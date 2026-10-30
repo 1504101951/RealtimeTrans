@@ -351,8 +351,9 @@ enum AccessibilitySelection {
 
     /// sourcePID 为来源进程；确定输入翻译的粘贴目标：焦点已是可写入的文本输入控件时直接返回 true；
     /// 否则（如在只读回复中选中文字）在来源应用当前窗口内查找可写入的文本输入控件，恰好一个时将焦点设到它上面，
-    /// 等待 inputTargetFocusDelay 让来源应用完成聚焦后返回 true；找到 0 个、多个或无法聚焦时返回 false。
-    /// 已知限制：只遍历前 inputTargetSearchMaxNodes 个节点、深度不超过 inputTargetSearchMaxDepth，超出部分的输入框视为不存在；
+    /// 等待 inputTargetFocusDelay 让来源应用完成聚焦后返回 true；找到 0 个、多个、遍历超时或无法聚焦时返回 false。
+    /// 已知限制：只遍历前 inputTargetSearchMaxNodes 个节点、深度不超过 inputTargetSearchMaxDepth、总时长不超过 inputTargetSearchTimeout，
+    /// 超出部分的输入框视为不存在；
     /// 出现输入框位于超大窗口树深处而找不到的应用时重新评估上限。
     static func focusWritableInput(sourcePID: pid_t) async -> Bool {
         let app = AXUIElementCreateApplication(sourcePID)
@@ -362,7 +363,10 @@ enum AccessibilitySelection {
         var queue: [(element: AXUIElement, depth: Int)] = [(window, 0)]
         var index = 0
         var found: [AXUIElement] = []
+        let deadline = ContinuousClock.now + AppConstants.inputTargetSearchTimeout
         while index < queue.count, index < AppConstants.inputTargetSearchMaxNodes, found.count < 2 {
+            // 遍历超时按未找到处理，不粘贴到可能并不唯一的输入框。
+            guard ContinuousClock.now < deadline else { return false }
             let (element, depth) = queue[index]
             index += 1
             if isWritableInput(element) { found.append(element); continue }

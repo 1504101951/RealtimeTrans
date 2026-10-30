@@ -141,11 +141,15 @@ final class SelectionMonitor {
         }
     }
 
-    /// 无参数；安装不吞掉原应用输入的全局监听，无返回值。
+    /// 无参数；设置辅助功能调用超时并安装不吞掉原应用输入的全局监听，无返回值。
     func start() {
+        // 系统级元素上设置的超时作用于本进程全部辅助功能调用：来源应用无响应时单次调用最多等待该时长（#68）。
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), AppConstants.axMessagingTimeout)
         let mouseMask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
         localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseMask) { [weak self] event in
             let type = event.type
+            // 仅使用快捷键时拖动与抬起只服务自动划词，直接放行原事件，不切到主线程处理（#68）。
+            guard self?.automatic == true || type == .leftMouseDown else { return event }
             let clickCount = event.clickCount
             let location = NSEvent.mouseLocation
             Task { @MainActor in
@@ -156,6 +160,7 @@ final class SelectionMonitor {
         }
         globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouseMask) { [weak self] event in
             let type = event.type
+            guard self?.automatic == true || type == .leftMouseDown else { return }
             let clickCount = event.clickCount
             let location = NSEvent.mouseLocation
             Task { @MainActor in
@@ -166,6 +171,8 @@ final class SelectionMonitor {
             let type = event.type
             let keyCode = event.keyCode
             let modifiers = event.modifierFlags
+            // 仅使用快捷键时按下只需处理 Escape，其余按下只服务键盘扩选（#68）。
+            guard self?.automatic == true || type == .keyUp || keyCode == AppConstants.escapeKeyCode else { return }
             Task { @MainActor in
                 // keyUp 时来源应用已经完成选区更新，监听不消费键盘事件。
                 self?.consumeKey(type: type, keyCode: keyCode, modifiers: modifiers)

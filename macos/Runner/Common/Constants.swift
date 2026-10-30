@@ -262,9 +262,12 @@ enum AppConstants {
     static let inputProgressSpacing: CGFloat = 6
     /// 输入翻译视为文本输入控件的 AX 角色：读不到选区时的全选范围与粘贴目标查找共用。
     static let axTextInputRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox"]
-    /// 输入翻译粘贴目标查找（#1）：焦点不在输入控件时遍历来源窗口的节点数与深度上限，聚焦目标后等待来源应用完成聚焦的时长。
+    /// 本进程辅助功能调用的消息超时（秒），来源应用无响应时单次调用最多等待该时长（#68）。
+    static let axMessagingTimeout: Float = 1
+    /// 输入翻译粘贴目标查找（#1）：焦点不在输入控件时遍历来源窗口的节点数、深度与总时长上限，聚焦目标后等待来源应用完成聚焦的时长。
     static let inputTargetSearchMaxNodes = 2000
     static let inputTargetSearchMaxDepth = 40
+    static let inputTargetSearchTimeout = Duration.seconds(1)
     static let inputTargetFocusDelay = Duration.milliseconds(80)
     /// 输入翻译粘贴后等待来源应用读取剪贴板的时长，之后才还原原剪贴板（#99）。
     static let pasteRestoreDelay = Duration.milliseconds(500)
@@ -296,11 +299,11 @@ enum AppConstants {
     static let systemStatusMethod = "systemStatus"
     /// recordScreenshotHistory 协议值；截图导出成功且开关开启时原生请求主引擎记录，与Dart常量同步。
     static let recordScreenshotHistoryMethod = "recordScreenshotHistory"
+    /// screenshotHistoryRecording 协议值；原生导出成功后向主引擎查询「记录截图历史」开关，与Dart常量同步。
+    static let screenshotHistoryRecordingMethod = "screenshotHistoryRecording"
     /// stitchScreenshots 协议值；按顺序拼接截图历史图片（#109），与Dart常量同步。
     static let stitchScreenshotsMethod = "stitchScreenshots"
     /// splitScreenshot 协议值；按高度等分一张截图历史图片（#109），与Dart常量同步。
-    /// screenshotHistoryRecording 协议值；原生导出成功后向主引擎查询「记录截图历史」开关，与Dart常量同步。
-    static let screenshotHistoryRecordingMethod = "screenshotHistoryRecording"
     static let splitScreenshotMethod = "splitScreenshot"
     /// compareScreenshots 协议值；逐像素比较两张截图历史图片（#109），与Dart常量同步。
     static let compareScreenshotsMethod = "compareScreenshots"
