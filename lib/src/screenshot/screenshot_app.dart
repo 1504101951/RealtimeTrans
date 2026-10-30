@@ -2,10 +2,12 @@ import 'drawing_preferences.dart';
 import '../common/constants/preference_keys.dart';
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
@@ -131,6 +133,9 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
   final TextEditingController _textController = TextEditingController();
   final List<Offset> _strokePoints = [];
 
+  /// 正在画的笔迹的外接矩形；逐点扩展，拖动预览不再每次遍历全部点（#68）。
+  Rect _strokeBounds = Rect.zero;
+
   Map<Object?, Object?> _capture = {};
   final GlobalKey _editorKey = GlobalKey();
   DrawingPreferences _drawing = DrawingPreferences();
@@ -151,8 +156,8 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
   /// 标尺两端（截图像素）；不进入标注与撤销，切换工具或新截图后清除（#111）。
   ({Offset start, Offset end})? _ruler;
 
-  /// 取色悬停点（截图像素），指针离开画布时为 null（#111）。
-  Offset? _picker;
+  /// 取色悬停点（截图像素），指针离开画布时为 null（#111）；悬停只通知取色标签层，不重建截图页面（#68）。
+  final ValueNotifier<Offset?> _picker = ValueNotifier(null);
 
   /// 当前截图的非预乘 RGBA 源像素及其解码任务；每张截图首次取色时解码一次（#111）。
   ByteData? _sourcePixels;
@@ -394,7 +399,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       _sourcePixels = null;
       _pixelLoad = null;
       _ruler = null;
-      _picker = null;
+      _picker.value = null;
       _capture = value;
       _toolbar = ScreenshotToolbarPreferences.fromMap(value);
       _confirmAction = ScreenshotConfirmAction.parse(
@@ -1110,11 +1115,10 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
         });
   }
 
-  /// 无参数；返回取色悬停点的源像素颜色，像素尚未解码或指针不在画布上时返回 null（#111）。
-  Color? get _pickedColor {
-    final point = _picker;
+  /// point 为截图像素坐标；返回该点的源像素颜色，像素尚未解码时返回 null（#111）。
+  Color? _colorAt(Offset point) {
     final pixels = _sourcePixels;
-    if (point == null || pixels == null) return null;
+    if (pixels == null) return null;
     final x = point.dx.floor().clamp(0, _document.width - 1);
     final y = point.dy.floor().clamp(0, _document.height - 1);
     final offset = (y * _document.width + x) * 4;
@@ -1128,16 +1132,16 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
 
   /// point 为悬停处的截图像素坐标，null 表示指针离开画布；更新取色悬停点并按需解码源像素，无返回值（#111）。
   void _hoverPicker(Offset? point) {
-    if (point == _picker) return;
-    setState(() => _picker = point);
+    if (point == _picker.value) return;
+    _picker.value = point;
     if (point != null) unawaited(_sourcePixelsReady());
   }
 
   /// point 为单击处的截图像素坐标；等待源像素就绪后复制该点的 `#RRGGBB` 并提示，无返回值（#111）。
   Future<void> _pickColor(Offset point) async {
-    setState(() => _picker = point);
+    _picker.value = point;
     await _sourcePixelsReady();
-    final color = _pickedColor;
+    final color = _colorAt(point);
     if (!mounted || color == null) return;
     // colorHex 把源像素格式化为大写 #RRGGBB。
     final hex = colorHex(color);
@@ -1453,6 +1457,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       _strokePoints
         ..clear()
         ..add(imagePoint);
+      _strokeBounds = Rect.fromPoints(imagePoint, imagePoint);
       _previewAnnotation = _draftAnnotation(imagePoint, imagePoint);
     });
   }
@@ -1536,6 +1541,9 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
       }
       if (_tool == ScreenshotTool.brush) {
         _strokePoints.add(imagePoint);
+        _strokeBounds = _strokeBounds.expandToInclude(
+          Rect.fromPoints(imagePoint, imagePoint),
+        );
       }
       _previewAnnotation = _draftAnnotation(_dragStart!, imagePoint);
     });
@@ -2002,12 +2010,13 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           style: _nextStyle.copyWith(
             strokeWidth: _nextStyle.strokeWidth * _pixelRatio,
           ),
-          bounds: boundsForPoints(
-            _strokePoints.isEmpty ? [start, end] : _strokePoints,
-          ),
-          points: List<Offset>.from(
-            _strokePoints.isEmpty ? [start, end] : _strokePoints,
-          ),
+          // 预览直接引用正在追加的笔迹点（只读视图）与逐点扩展的外接矩形，松手提交时才复制（#68）。
+          bounds: _strokePoints.isEmpty
+              ? boundsForPoints([start, end])
+              : _strokeBounds,
+          points: _strokePoints.isEmpty
+              ? [start, end]
+              : UnmodifiableListView(_strokePoints),
         );
       case ScreenshotTool.rect:
         return EditAnnotation(
@@ -2295,6 +2304,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
   @override
   void dispose() {
     _feedbackTimer?.cancel();
+    _picker.dispose();
     _document.removeListener(_onDocumentChanged);
     _document.dispose();
     _focusNode.dispose();
@@ -2454,7 +2464,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
                   },
                   ruler: _ruler,
                   picker: _picker,
-                  pickerColor: _pickedColor,
+                  pickerColor: _colorAt,
                   onPickerHover: _hoverPicker,
                   onPickerTap: (point) {
                     if (_tool == renderedTool) unawaited(_pickColor(point));
@@ -2750,7 +2760,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
           _expandedRow = null;
           // 测量结果只属于当前工具，切换后清除（#111）。
           _ruler = null;
-          _picker = null;
+          _picker.value = null;
           unawaited(_syncRecordingPreview());
           unawaited(_syncLivePreview());
           _recordingApplication = null;
@@ -3293,10 +3303,10 @@ class _EditorSurface extends StatefulWidget {
   /// 编号工具下的单击位置（源图像素）；放置编号标记（#107）。
   final ValueChanged<Offset> onStepTap;
 
-  /// 标尺两端、取色悬停点（截图像素）与该点源像素颜色；由 MeasureLayer 显示（#111）。
+  /// 标尺两端、取色悬停点（截图像素，变化时只重建取色标签层）与按坐标取源像素颜色；由 MeasureLayer 显示（#111）。
   final ({Offset start, Offset end})? ruler;
-  final Offset? picker;
-  final Color? pickerColor;
+  final ValueListenable<Offset?> picker;
+  final Color? Function(Offset point) pickerColor;
 
   /// 取色工具下的悬停位置（截图像素，离开画布为 null）与单击位置（#111）。
   final ValueChanged<Offset?> onPickerHover;
@@ -3478,7 +3488,9 @@ class _EditorSurfaceState extends State<_EditorSurface> {
                     filterQuality: FilterQuality.none,
                     isAntiAlias: false,
                   ),
-                  CustomPaint(
+                  // 标注绘制层单独成层，页面其他部分重绘时不连带重画标注（#68）。
+                  RepaintBoundary(
+                    child: CustomPaint(
                     painter: _OverlayPainter(
                       sourceImage: widget.sourceImage,
                       stickers: widget.document.stickerImages,
@@ -3489,14 +3501,22 @@ class _EditorSurfaceState extends State<_EditorSurface> {
                       imageSize: imageSize,
                     ),
                   ),
-                  // 测量线与取色标签在标注之上，不进入导出（#111）。
-                  if (widget.ruler != null || widget.picker != null)
-                    MeasureLayer(
-                      imageSize: imageSize,
-                      ruler: widget.ruler,
-                      picker: widget.picker,
-                      pickerColor: widget.pickerColor,
-                    ),
+                  ),
+                  // 测量线与取色标签在标注之上，不进入导出（#111）；取色悬停只重建本层（#68）。
+                  ValueListenableBuilder<Offset?>(
+                    valueListenable: widget.picker,
+                    builder: (context, picker, _) =>
+                        widget.ruler == null && picker == null
+                        ? const SizedBox.shrink()
+                        : MeasureLayer(
+                            imageSize: imageSize,
+                            ruler: widget.ruler,
+                            picker: picker,
+                            pickerColor: picker == null
+                                ? null
+                                : widget.pickerColor(picker),
+                          ),
+                  ),
                   ...[
                     for (final overlay in widget.ocrOverlays)
                       Positioned.fromRect(
@@ -4095,8 +4115,12 @@ class _OverlayPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _OverlayPainter oldDelegate) {
+    // annotations 只在文档变更时换新对象（#68）；贴纸位图在加入对应标注前载入，随标注变更一起重绘。
     return oldDelegate.annotations != annotations ||
         oldDelegate.previewAnnotation != previewAnnotation ||
+        oldDelegate.selectedShape != selectedShape ||
+        oldDelegate.sourceImage != sourceImage ||
+        oldDelegate.pixelRatio != pixelRatio ||
         oldDelegate.imageSize != imageSize;
   }
 }

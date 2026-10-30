@@ -214,8 +214,19 @@ class EditDocument extends ChangeNotifier {
   /// 无参数；返回裁剪框（源图像素坐标）。
   Rect get cropRect => _crop;
 
-  /// 无参数；返回当前标注只读视图。
-  List<EditAnnotation> get annotations => List.unmodifiable(_annotations);
+  /// 当前标注只读视图的缓存；文档变更（notifyListeners）时作废。
+  List<EditAnnotation>? _annotationsView;
+
+  /// 无参数；返回当前标注只读视图。文档未变更时多次读取返回同一对象，画布据此判断无需重绘（#68）。
+  List<EditAnnotation> get annotations =>
+      _annotationsView ??= List.unmodifiable(_annotations);
+
+  /// 无参数；所有标注变更都经此通知，先作废只读视图缓存再通知监听者，无返回值。
+  @override
+  void notifyListeners() {
+    _annotationsView = null;
+    super.notifyListeners();
+  }
 
   /// 无参数；是否还能撤销。
   bool get canUndo => _undo.isNotEmpty;
@@ -504,39 +515,75 @@ class EditDocument extends ChangeNotifier {
         (a.bottom - b.bottom).abs() < 0.5;
   }
 
-  /// canvas为源图坐标目标，annotation为标注；按类型绘制导出像素，不改变文档，无返回值。
-  /// clip为需要遮蔽的源图轨迹；按固定12px网格采样，区域外像素不变。
+  /// 马赛克栅格缓存所属的源图；源图更换时释放全部缓存（#68）。
+  static ui.Image? _mosaicSource;
+
+  /// 马赛克栅格缓存：网格对齐区域（源图像素）→ 该区域逐块采样后的图片，按最近使用顺序排列。
+  static final Map<Rect, ui.Image> _mosaicTiles = {};
+
+  /// 马赛克栅格缓存的最多张数；超出时释放最久未用的一张。拖动画马赛克时每帧区域都不同，上限防止缓存无界增长。
+  static const _mosaicCacheLimit = 32;
+
+  /// canvas为源图坐标目标，source 为源图；clip为需要遮蔽的源图轨迹，bounds 为其外接矩形；按固定12px网格采样，区域外像素不变，无返回值。
+  /// 网格对齐区域只栅格化一次并缓存，重绘与导出直接绘制缓存图（#68）。
   static void _paintMosaic(
     Canvas canvas,
     ui.Image source,
     Path clip,
     Rect bounds,
   ) {
-    final area = bounds.intersect(
-      Rect.fromLTWH(0, 0, source.width.toDouble(), source.height.toDouble()),
+    final sourceRect = Rect.fromLTWH(
+      0,
+      0,
+      source.width.toDouble(),
+      source.height.toDouble(),
     );
+    final area = bounds.intersect(sourceRect);
     if (area.isEmpty) return;
     const block = DrawingMetrics.mosaicPixels;
+    // 覆盖 area 的整块网格区域，超出源图的部分截掉；边界均为整数像素。
+    final region = Rect.fromLTRB(
+      (area.left / block).floor() * block,
+      (area.top / block).floor() * block,
+      math.min((area.right / block).ceil() * block, sourceRect.right),
+      math.min((area.bottom / block).ceil() * block, sourceRect.bottom),
+    );
+    if (!identical(_mosaicSource, source)) {
+      for (final image in _mosaicTiles.values) {
+        image.dispose();
+      }
+      _mosaicTiles.clear();
+      _mosaicSource = source;
+    }
+    // 命中时移到末尾，保持最近使用顺序；未命中时 _rasterMosaic 栅格化该区域。
+    final tiles =
+        _mosaicTiles.remove(region) ?? _rasterMosaic(source, region, block);
+    _mosaicTiles[region] = tiles;
+    if (_mosaicTiles.length > _mosaicCacheLimit) {
+      _mosaicTiles.remove(_mosaicTiles.keys.first)!.dispose();
+    }
     canvas.save();
     canvas.clipPath(clip);
-    for (
-      var y = (area.top / block).floor() * block;
-      y < area.bottom;
-      y += block
-    ) {
-      for (
-        var x = (area.left / block).floor() * block;
-        x < area.right;
-        x += block
-      ) {
-        final tile = Rect.fromLTWH(x, y, block, block).intersect(
-          Rect.fromLTWH(
-            0,
-            0,
-            source.width.toDouble(),
-            source.height.toDouble(),
-          ),
-        );
+    canvas.drawImage(
+      tiles,
+      region.topLeft,
+      Paint()
+        ..filterQuality = FilterQuality.none
+        ..isAntiAlias = false,
+    );
+    canvas.restore();
+  }
+
+  /// source 为源图，region 为网格对齐的源图区域，block 为块边长；每块取块中心像素铺满整块，返回与 region 等大的图片。
+  static ui.Image _rasterMosaic(ui.Image source, Rect region, double block) {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final paint = Paint()
+      ..filterQuality = FilterQuality.none
+      ..isAntiAlias = false;
+    for (var y = region.top; y < region.bottom; y += block) {
+      for (var x = region.left; x < region.right; x += block) {
+        final tile = Rect.fromLTWH(x, y, block, block).intersect(region);
         canvas.drawImageRect(
           source,
           Rect.fromLTWH(
@@ -545,14 +592,18 @@ class EditDocument extends ChangeNotifier {
             1,
             1,
           ),
-          tile,
-          Paint()
-            ..filterQuality = FilterQuality.none
-            ..isAntiAlias = false,
+          tile.shift(-region.topLeft),
+          paint,
         );
       }
     }
-    canvas.restore();
+    final picture = recorder.endRecording();
+    final image = picture.toImageSync(
+      region.width.toInt(),
+      region.height.toInt(),
+    );
+    picture.dispose();
+    return image;
   }
 
   /// text 为编号文字，fontSize 为字号，color 为数字颜色；返回不换行的粗体段落。

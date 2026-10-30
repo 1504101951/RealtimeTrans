@@ -214,6 +214,64 @@ void main() {
     expect(await rgba(await doc.renderPng()), output);
   });
 
+  test('马赛克缓存跟随源图：同一区域换一张源图后按新图采样', () async {
+    // 作用：马赛克按区域栅格化后缓存（#68），换图后不能沿用上一张图的缓存。
+    // 边界：两张源图的马赛克区域完全相同，只有颜色不同；第二张图的输出必须等于第二张图块中心的颜色。
+    const bounds = Rect.fromLTWH(12, 12, 24, 24);
+    List<int> pixel(Uint8List data, int x, int y) =>
+        data.sublist((y * 48 + x) * 4, (y * 48 + x) * 4 + 4);
+    final first = EditDocument()..loadCapture(await decodePng(await fixture()));
+    first.addAnnotation(
+      EditAnnotation(
+        id: '',
+        kind: AnnotationKind.mask,
+        bounds: bounds,
+        shapeMode: ShapeMode.mosaic,
+      ),
+    );
+    await first.renderPng();
+    // 第二张图整幅纯绿，与 fixture 的逐列蓝紫渐变任何一格都不同。
+    final recorder = ui.PictureRecorder();
+    Canvas(recorder).drawRect(
+      const Rect.fromLTWH(0, 0, 48, 48),
+      Paint()..color = const Color(0xFF00FF00),
+    );
+    final picture = recorder.endRecording();
+    final green = await picture.toImage(48, 48);
+    picture.dispose();
+    final second = EditDocument()..loadCapture(green);
+    second.addAnnotation(
+      EditAnnotation(
+        id: '',
+        kind: AnnotationKind.mask,
+        bounds: bounds,
+        shapeMode: ShapeMode.mosaic,
+      ),
+    );
+    final output = await rgba(await second.renderPng());
+    expect(pixel(output, 12, 12), [0, 255, 0, 255]);
+    expect(pixel(output, 35, 35), [0, 255, 0, 255]);
+  });
+
+  test('标注只读视图在文档未变更时复用同一对象，变更后换新并包含新标注', () async {
+    // 作用：画布按视图对象判断是否重绘（#68）；未变更时必须是同一对象，变更后必须换新，否则画布不会重绘。
+    // 边界：连续两次读取之间没有任何变更；随后加入一条标注。
+    final doc = EditDocument()..loadCapture(await decodePng(await fixture()));
+    final before = doc.annotations;
+    expect(identical(doc.annotations, before), isTrue);
+    doc.addAnnotation(
+      EditAnnotation(
+        id: '',
+        kind: AnnotationKind.rectangle,
+        bounds: const Rect.fromLTWH(4, 4, 12, 12),
+      ),
+    );
+    expect(identical(doc.annotations, before), isFalse);
+    expect(doc.annotations, hasLength(1));
+    doc.undo();
+    expect(doc.annotations, isEmpty);
+  });
+
   test('颜色与线宽快照隔离，更新目标只产生一次可撤销变化', () async {
     final doc = EditDocument()..loadCapture(await decodePng(await fixture()));
     const style = DrawingStyle(color: Colors.red, strokeWidth: 3);
