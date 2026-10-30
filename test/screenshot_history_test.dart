@@ -33,9 +33,9 @@ void main() {
   });
   tearDown(() => directory.deleteSync(recursive: true));
 
-  test('默认不记录；开启后写入图片与尺寸，同一截图再次导出只保留最后一次', () {
+  test('默认不记录；开启后写入图片与尺寸，同一截图再次导出只保留最后一次', () async {
     // 边界：开关默认值为关闭；同一 captureId 的第二次导出尺寸不同，必须覆盖而不是新增。
-    store.record(
+    await store.record(
       captureId: 'a',
       png: fakePng(10, 20),
       capturedAt: now,
@@ -43,13 +43,13 @@ void main() {
     );
     expect(store.list(), isEmpty);
     store.recordingEnabled = true;
-    store.record(
+    await store.record(
       captureId: 'a',
       png: fakePng(10, 20),
       capturedAt: now,
       now: now,
     );
-    store.record(
+    await store.record(
       captureId: 'a',
       png: fakePng(30, 40),
       capturedAt: now,
@@ -62,22 +62,45 @@ void main() {
     expect(File(records.single.path).readAsBytesSync(), fakePng(30, 40));
   });
 
-  test('超过 100 条删除最早的记录及图片，超过 30 天的记录在下次写入时删除', () {
+  test('同一截图连续导出不等待前一次写完时，按到达顺序串行，保留最后一次', () async {
+    // 作用：文件写入为异步，变更必须按请求到达顺序执行（#68）。
+    // 边界：第一次写入尚未完成就发起第二次，第二次尺寸不同，结果只能是第二次的尺寸与图片。
+    store.recordingEnabled = true;
+    final first = store.record(
+      captureId: 'a',
+      png: fakePng(10, 20),
+      capturedAt: now,
+      now: now,
+    );
+    final second = store.record(
+      captureId: 'a',
+      png: fakePng(30, 40),
+      capturedAt: now,
+      now: now,
+    );
+    await Future.wait([first, second]);
+    final records = store.list();
+    expect(records, hasLength(1));
+    expect((records.single.width, records.single.height), (30, 40));
+    expect(File(records.single.path).readAsBytesSync(), fakePng(30, 40));
+  });
+
+  test('超过 100 条删除最早的记录及图片，超过 30 天的记录在下次写入时删除', () async {
     // 边界：第 101 条触发按条数清理；恰好 30 天内保留，30 天外一毫秒删除。
     store.recordingEnabled = true;
-    store.record(
+    await store.record(
       captureId: 'old',
       png: fakePng(1, 1),
       capturedAt: now - 30 * day - 1,
       now: now - 30 * day,
     );
-    store.record(
+    await store.record(
       captureId: 'edge',
       png: fakePng(1, 1),
       capturedAt: now - 30 * day,
       now: now - 30 * day,
     );
-    store.record(
+    await store.record(
       captureId: 'fresh',
       png: fakePng(1, 1),
       capturedAt: now,
@@ -87,7 +110,7 @@ void main() {
     expect(paths.map((p) => p.split('/').last), ['fresh.png', 'edge.png']);
     expect(File('${store.directory.path}/old.png').existsSync(), isFalse);
     for (var i = 0; i < 100; i++) {
-      store.record(
+      await store.record(
         captureId: 'n$i',
         png: fakePng(1, 1),
         capturedAt: now + i + 1,
@@ -101,11 +124,11 @@ void main() {
     expect(File('${store.directory.path}/fresh.png').existsSync(), isFalse);
   });
 
-  test('图片被移走时标记缺失仍可删除；清空删除全部历史图片', () {
+  test('图片被移走时标记缺失仍可删除；清空删除全部历史图片', () async {
     // 边界：文件缺失是外部操作导致的唯一不一致状态，列表不能因此失败。
     store.recordingEnabled = true;
-    store.record(captureId: 'a', png: fakePng(1, 1), capturedAt: now, now: now);
-    store.record(
+    await store.record(captureId: 'a', png: fakePng(1, 1), capturedAt: now, now: now);
+    await store.record(
       captureId: 'b',
       png: fakePng(1, 1),
       capturedAt: now + 1,
@@ -114,34 +137,34 @@ void main() {
     final missing = store.list().last;
     File(missing.path).deleteSync();
     expect(store.list().last.exists, isFalse);
-    store.delete(missing.id);
+    await store.delete(missing.id);
     expect(store.list().map((r) => r.path.split('/').last), ['b.png']);
-    store.clear();
+    await store.clear();
     expect(store.list(), isEmpty);
     expect(store.directory.listSync().whereType<File>(), isEmpty);
   });
 
-  test('拼接与拆分结果不受记录开关限制，按给定顺序从上到下排列且身份不重复', () {
+  test('拼接与拆分结果不受记录开关限制，按给定顺序从上到下排列且身份不重复', () async {
     // 边界：开关保持默认关闭仍要写入；同一时刻生成的三段需按列表顺序显示，第二次生成不覆盖第一次；
     // 已有 99 条时再加 3 条，按 100 条上限删除最早的 2 条。
-    store.add([fakePng(1, 10), fakePng(2, 10), fakePng(3, 10)], now);
+    await store.add([fakePng(1, 10), fakePng(2, 10), fakePng(3, 10)], now);
     expect([for (final record in store.list()) record.width], [1, 2, 3]);
-    store.add([fakePng(4, 10)], now);
+    await store.add([fakePng(4, 10)], now);
     expect(store.list(), hasLength(4));
     expect(store.list().first.width, 4);
     expect(store.list().every((record) => record.exists), isTrue);
 
-    store.clear();
+    await store.clear();
     store.recordingEnabled = true;
     for (var i = 0; i < 99; i++) {
-      store.record(
+      await store.record(
         captureId: 'old-$i',
         png: fakePng(100 + i, 1),
         capturedAt: now - 1000 + i,
         now: now,
       );
     }
-    store.add([fakePng(1, 1), fakePng(2, 1), fakePng(3, 1)], now);
+    await store.add([fakePng(1, 1), fakePng(2, 1), fakePng(3, 1)], now);
     final widths = [for (final record in store.list()) record.width];
     expect(widths, hasLength(100));
     expect(widths.take(3), [1, 2, 3]);

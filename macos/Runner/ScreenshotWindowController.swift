@@ -582,23 +582,29 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
                 recordHistory(id: id, payload: payload)
                 result(nil)
             case AppConstants.saveScreenshotMethod:
-                defer { PerformanceLog.record("export-save", since: exportStart) }
                 let name = args["name"] as? String ?? "screenshot.png"
-                do {
-                    // datedDirectory统一默认路径；save独占创建，重名只增加序号。
-                    let directory = try ScreenshotStorage.datedDirectory(
-                        basePath: UserDefaults.standard.string(forKey: AppConstants.screenshotSaveDirectoryKey),
-                        category: .screenshot)
-                    let url = try ScreenshotStorage.save(payload, directory: directory, name: name)
-                    // 复制并保存在保存成功后写剪贴板，图片只经通道传一次；复制失败时已保存的文件保留（#68）。
-                    if args["copy"] as? Bool == true, !writePNG(payload) {
-                        result(FlutterError(code: AppConstants.copyFailedError, message: "无法复制截图，请重试。", details: nil))
-                        return
+                let basePath = UserDefaults.standard.string(forKey: AppConstants.screenshotSaveDirectoryKey)
+                let copies = args["copy"] as? Bool == true
+                Task { @MainActor in
+                    defer { PerformanceLog.record("export-save", since: exportStart) }
+                    do {
+                        // 建目录与写文件在后台执行，不阻塞主线程（#68）；datedDirectory统一默认路径，save独占创建，重名只增加序号。
+                        let url = try await Task.detached {
+                            let directory = try ScreenshotStorage.datedDirectory(basePath: basePath, category: .screenshot)
+                            return try ScreenshotStorage.save(payload, directory: directory, name: name)
+                        }.value
+                        // 写盘期间截图已被替换：文件已保存，剪贴板与历史属于旧截图，不再写入。
+                        guard id == self.captureId else { result(url.path); return }
+                        // 复制并保存在保存成功后写剪贴板，图片只经通道传一次；复制失败时已保存的文件保留（#68）。
+                        if copies, !self.writePNG(payload) {
+                            result(FlutterError(code: AppConstants.copyFailedError, message: "无法复制截图，请重试。", details: nil))
+                            return
+                        }
+                        self.recordHistory(id: id, payload: payload)
+                        result(url.path)
+                    } catch {
+                        result(FlutterError(code: AppConstants.saveFailedError, message: error.localizedDescription, details: nil))
                     }
-                    recordHistory(id: id, payload: payload)
-                    result(url.path)
-                } catch {
-                    result(FlutterError(code: AppConstants.saveFailedError, message: error.localizedDescription, details: nil))
                 }
             case AppConstants.pinScreenshotMethod:
                 guard let x = args["x"] as? NSNumber, let y = args["y"] as? NSNumber else {

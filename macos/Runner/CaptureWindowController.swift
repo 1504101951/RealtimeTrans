@@ -703,12 +703,15 @@ final class CaptureWindowController: NSObject, NSWindowDelegate {
                         throw GIFExporter.ExportError(message: "当前没有可保存的长图。")
                     }
                     let name = args["name"] as? String ?? "长截图.png"
-                    // datedDirectory创建截图/日期目录；save按源像素写入，不经过裁剪编码。
-                    let directory = try ScreenshotStorage.datedDirectory(
-                        basePath: UserDefaults.standard.string(forKey: AppConstants.screenshotSaveDirectoryKey),
-                        category: .screenshot)
-                    let url = try ScreenshotStorage.save(png, directory: directory, name: name)
-                    service.noteSavedScroll(url.path)
+                    let basePath = UserDefaults.standard.string(forKey: AppConstants.screenshotSaveDirectoryKey)
+                    let token = service.id
+                    // 建目录与写文件在后台执行，不阻塞主线程（#68）；datedDirectory创建截图/日期目录，save按源像素写入，不经过裁剪编码。
+                    let url = try await Task.detached {
+                        let directory = try ScreenshotStorage.datedDirectory(basePath: basePath, category: .screenshot)
+                        return try ScreenshotStorage.save(png, directory: directory, name: name)
+                    }.value
+                    // 写盘期间会话已更换时文件已保存，但不记到新会话上。
+                    if token == service.id { service.noteSavedScroll(url.path) }
                 default:
                     result(FlutterMethodNotImplemented); return
                 }
