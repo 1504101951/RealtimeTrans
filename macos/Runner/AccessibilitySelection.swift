@@ -57,7 +57,8 @@ enum AccessibilitySelection {
     }
 
     /// sourcePID 为来源，selectionElement 为捕获时的文字节点；true 有选区，false 确认失效，nil 不可读。
-    static func hasReadableSelection(sourcePID: pid_t, selectionElement: AXUIElement?) -> Bool? {
+    /// 声明为 async：从主线程调用时在后台执行，来源应用响应慢不阻塞主线程（#68）。
+    static func hasReadableSelection(sourcePID: pid_t, selectionElement: AXUIElement?) async -> Bool? {
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == sourcePID else { return false }
         let app = AXUIElementCreateApplication(sourcePID)
         guard let element = focusedElement(from: app) else { return nil }
@@ -81,7 +82,8 @@ enum AccessibilitySelection {
     }
 
     /// sourcePID 为键盘手势来源；允许可疑文本选区先显示按钮，明确的文件/安全控件返回 false。
-    static func permitsKeyboardTrigger(sourcePID: pid_t) -> Bool {
+    /// 声明为 async：从主线程调用时在后台执行，来源应用响应慢不阻塞主线程（#68）。
+    static func permitsKeyboardTrigger(sourcePID: pid_t) async -> Bool {
         guard AXIsProcessTrusted(), NSWorkspace.shared.frontmostApplication?.processIdentifier == sourcePID else { return false }
         let app = AXUIElementCreateApplication(sourcePID)
         // 未发布焦点节点不等于没有文字；候选按钮仅在用户点击后才执行实际读取。
@@ -389,7 +391,8 @@ enum AccessibilitySelection {
 
     /// sourcePID 为来源进程；焦点为非安全的文本输入控件且未开启安全输入时发送 Command-A，返回是否已全选。
     /// 只在输入翻译读不到选区时调用，非文本控件不发送，避免全选文件列表等其他内容。
-    static func selectAllInFocusedTextInput(sourcePID: pid_t) -> Bool {
+    /// 声明为 async：从主线程调用时在后台执行，来源应用响应慢不阻塞主线程（#68）。
+    static func selectAllInFocusedTextInput(sourcePID: pid_t) async -> Bool {
         guard !IsSecureEventInputEnabled(),
               let focused = focusedElement(from: AXUIElementCreateApplication(sourcePID)),
               !isSecure(focused),

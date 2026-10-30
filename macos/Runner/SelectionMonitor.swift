@@ -292,15 +292,17 @@ final class SelectionMonitor {
             var selection = await AccessibilitySelection.readFrontmostSelection(sourcePID: pid, allowCopy: gesture.isExplicit)
             // 输入翻译读不到选区时，在非安全文本输入框内全选后再读，替换整个输入框。
             if gesture == .inputHotkey, (selection.text ?? "").isEmpty, !Task.isCancelled,
-               AccessibilitySelection.selectAllInFocusedTextInput(sourcePID: pid) {
+               await AccessibilitySelection.selectAllInFocusedTextInput(sourcePID: pid) {
                 do { try await Task.sleep(for: .milliseconds(80)) } catch { return }
                 selection = await AccessibilitySelection.readFrontmostSelection(sourcePID: pid, allowCopy: true)
             }
             guard self?.isCapturingScreenshot != true, !Task.isCancelled, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
                   gesture.isExplicit || MacPlatformBridge.Shared.instance?.retainsResult != true else { return }
             let text = selection.text ?? ""
-            let keyboardCandidate = (gesture == .selectAll || gesture == .keyboard)
-                && AccessibilitySelection.permitsKeyboardTrigger(sourcePID: pid)
+            // permitsKeyboardTrigger 在后台读取焦点节点，返回后重新确认本次读取仍有效。
+            let keyboardCandidate = gesture == .selectAll || gesture == .keyboard
+                ? await AccessibilitySelection.permitsKeyboardTrigger(sourcePID: pid) : false
+            guard !Task.isCancelled else { return }
             // 明确热键即使读不到文字也要展示失败卡片，不能静默丢弃用户操作。
             guard gesture.isExplicit || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || keyboardCandidate else {
                 MacPlatformBridge.Shared.instance?.invalidateSelection()
@@ -355,7 +357,10 @@ final class SelectionMonitor {
             do { try await Task.sleep(for: .milliseconds(80)) } catch { return }
             guard let self, self.observedPID == pid else { return }
             // 焦点可能在同一浏览器文本树内迁移；不可读保持未知，不能由节点身份变化推断清空。
-            if AccessibilitySelection.hasReadableSelection(sourcePID: pid, selectionElement: self.selectionElement) == false {
+            // hasReadableSelection 在后台读取选区；返回后来源或监听已变化时不处理旧结果。
+            let readable = await AccessibilitySelection.hasReadableSelection(sourcePID: pid, selectionElement: self.selectionElement)
+            guard !Task.isCancelled, self.observedPID == pid else { return }
+            if readable == false {
                 MacPlatformBridge.Shared.instance?.invalidateSelection()
                 self.stopObservingSelection()
             }
