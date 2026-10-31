@@ -18,7 +18,6 @@ abstract final class ScreenshotActions {
   static const arrow = 'screenshot-tool-arrow';
   static const step = 'screenshot-tool-step';
   static const text = 'screenshot-tool-text';
-  static const mask = 'screenshot-tool-mask';
   static const brush = 'screenshot-tool-brush';
   static const eyedropper = 'screenshot-tool-eyedropper';
   static const ruler = 'screenshot-tool-ruler';
@@ -104,7 +103,6 @@ abstract final class ScreenshotActions {
     arrow: '箭头',
     step: '编号',
     text: '文字',
-    mask: '图形',
     brush: '画笔',
     eyedropper: '取色',
     ruler: '标尺',

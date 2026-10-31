@@ -11,53 +11,14 @@ import 'package:translate_app/src/settings/screenshot_toolbar_preferences.dart';
 
 /// 覆盖真实配置状态、冲突边界及录制/排序后的结果，不检查下游调用次数。
 void main() {
-  test('合并旧矩形与遮挡保留顺序、绑定优先级及显隐意图', () {
-    final old = [...ScreenshotActions.icons.keys, ScreenshotActions.mask];
-    final migrated = ScreenshotToolbarPreferences.fromMap({
-      PreferenceKeys.screenshotToolbarOrder: old,
-      PreferenceKeys.screenshotToolbarShortcuts: {
-        ScreenshotActions.mask: {'keyId': 49, 'modifiers': 0},
-      },
-      PreferenceKeys.screenshotToolbarHidden: [ScreenshotActions.rect],
-    });
-    expect(migrated.order, ScreenshotActions.icons.keys.toList());
-    expect(migrated.shortcuts[ScreenshotActions.rect]!.keyId, 49);
-    expect(migrated.hidden, isNot(contains(ScreenshotActions.rect)));
-    final hidden = ScreenshotToolbarPreferences.fromMap({
-      PreferenceKeys.screenshotToolbarOrder: old,
-      PreferenceKeys.screenshotToolbarHidden: [
-        ScreenshotActions.rect,
-        ScreenshotActions.mask,
-      ],
-    });
-    expect(hidden.hidden, contains(ScreenshotActions.rect));
-    final oldWithoutRect = [...ScreenshotActions.icons.keys]
-      ..remove(ScreenshotActions.rect);
-    oldWithoutRect.insertAll(1, [
-      ScreenshotActions.palette,
-      ScreenshotActions.mask,
-    ]);
-    final relative = ScreenshotToolbarPreferences.fromMap({
-      PreferenceKeys.screenshotToolbarOrder: oldWithoutRect,
-    });
-    expect(relative.order[1], ScreenshotActions.rect);
-
-    expect(
-      hidden.toMap()[PreferenceKeys.screenshotToolbarOrder],
-      isNot(contains(ScreenshotActions.mask)),
-    );
-  });
-
-  test('旧配置补上实时翻译并丢弃已移除的撤销与重做', () {
-    // 作用：升级前保存的工具栏配置在新版本里仍能读取，不因顶层动作增减而校验失败。
-    // 边界：旧顺序含撤销、重做且不含实时翻译、编号、美化与比例；新动作插到默认顺序中各自前一个动作之后（实时翻译在翻译文字后，编号在箭头后，美化在画笔后，比例在美化后）；
-    // 撤销的快捷键和隐藏状态一并丢弃，其余动作的相对顺序不变。
+  test('已保存配置缺少的动作按默认顺序补上', () {
+    // 作用：新增动作后，已保存的工具栏配置仍能读取。
+    // 边界：顺序不含实时翻译、编号、美化与比例；新动作插到默认顺序中各自前一个动作之后（实时翻译在翻译文字后，编号在箭头后，美化在画笔后，比例在美化后）；
+    // 其余动作的相对顺序不变。
     const old = [
       ScreenshotActions.close,
-      'screenshot-undo',
       ScreenshotActions.ocrTranslate,
       ScreenshotActions.cursor,
-      'screenshot-redo',
       ScreenshotActions.crop,
       ScreenshotActions.rect,
       ScreenshotActions.arrow,
@@ -70,9 +31,7 @@ void main() {
     ];
     final migrated = ScreenshotToolbarPreferences.fromMap({
       PreferenceKeys.screenshotToolbarOrder: old,
-      PreferenceKeys.screenshotToolbarHidden: ['screenshot-redo'],
       PreferenceKeys.screenshotToolbarShortcuts: {
-        'screenshot-undo': {'keyId': 49, 'modifiers': 0},
         ScreenshotActions.crop: {'keyId': 50, 'modifiers': 0},
       },
     });
@@ -94,7 +53,6 @@ void main() {
       ScreenshotActions.copy,
       ScreenshotActions.ocrCopy,
     ]);
-    expect(migrated.hidden, isEmpty);
     expect(migrated.shortcuts.keys, [ScreenshotActions.crop]);
   });
 
@@ -155,28 +113,12 @@ void main() {
     }
   });
 
-  test('取消上下文自定义后保留顶层相对顺序与绑定，未知动作仍报错', () {
-    // 旧配置确实包含全部22项；仅删除明确撤销的上下文配置，不能重排用户顶层工具。
-    final order = ScreenshotActions.labels.keys.toList().reversed.toList();
-    final preferences = ScreenshotToolbarPreferences.fromMap({
-      PreferenceKeys.screenshotToolbarOrder: order,
-      PreferenceKeys.screenshotToolbarShortcuts: {
-        ScreenshotActions.text: {
-          'keyId': LogicalKeyboardKey.digit1.keyId,
-          'modifiers': 0,
-        },
-        ScreenshotActions.sizeUp: {
-          'keyId': LogicalKeyboardKey.digit2.keyId,
-          'modifiers': 0,
-        },
-      },
-    });
-    expect(preferences.order, order.where(ScreenshotActions.icons.containsKey));
-    expect(preferences.shortcuts.keys, [ScreenshotActions.text]);
+  test('已保存配置含未知动作时报错', () {
+    // 作用：未知动作不静默丢弃，由校验抛错。边界：完整默认顺序之外只多一个未知 id。
     expect(
       () => ScreenshotToolbarPreferences.fromMap({
         PreferenceKeys.screenshotToolbarOrder: [
-          ...preferences.order,
+          ...ScreenshotToolbarPreferences().order,
           'unknown',
         ],
       }),

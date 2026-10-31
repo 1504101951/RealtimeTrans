@@ -64,10 +64,6 @@ class ToolbarShortcut {
 /// 结构最多两级：order 是一级功能的顺序，children 是父级到子级列表。
 /// 每个可拼接功能在两者中恰好出现一次；只有“工具”类功能可以作为父级。
 class ScreenshotToolbarPreferences {
-  /// 已从产品移除的顶层动作；已保存配置中它们的顺序、隐藏状态和快捷键直接丢弃。
-  /// 撤销与重做只保留系统快捷键 ⌘Z 与 ⇧⌘Z。
-  static const _removed = {'screenshot-undo', 'screenshot-redo'};
-
   /// order 为一级功能顺序，children 为父子结构；两者都缺省时采用默认结构。
   /// 只给 order 时视为全部一级之外没有子级。
   ScreenshotToolbarPreferences({
@@ -131,7 +127,7 @@ class ScreenshotToolbarPreferences {
   );
 
   /// map为完整应用偏好；缺省采用默认结构，返回已校验快照。
-  /// 已保存配置里没有的功能按默认结构补上，已移除的功能丢弃。
+  /// 已保存配置里没有的功能按默认结构补上，未知功能由校验报错。
   factory ScreenshotToolbarPreferences.fromMap(Map<Object?, Object?> map) {
     final storedOrder = (map[PreferenceKeys.screenshotToolbarOrder] as List?)
         ?.cast<String>();
@@ -139,38 +135,12 @@ class ScreenshotToolbarPreferences {
         (map[PreferenceKeys.screenshotToolbarChildren] as Map?);
     final storedShortcuts =
         (map[PreferenceKeys.screenshotToolbarShortcuts] as Map?);
-    // 移除已取消的上下文设置和已移除的顶层动作，未知ID仍由校验报错。
-    bool keep(String id) =>
-        ScreenshotActions.icons.containsKey(id) ||
-        !ScreenshotActions.labels.containsKey(id) && !_removed.contains(id);
-    final rawHidden =
-        (map[PreferenceKeys.screenshotToolbarHidden] as List?)
-            ?.cast<String>()
-            .toSet() ??
-        <String>{};
-    final order = storedOrder?.where(keep).toList();
-    final hadMask = storedOrder?.contains(ScreenshotActions.mask) ?? false;
-    // 合并优先保留原矩形位置；旧遮挡的唯一绑定转给图形，不维持两个入口。
-    if (order != null &&
-        storedOrder!.contains(ScreenshotActions.mask) &&
-        !order.contains(ScreenshotActions.rect)) {
-      order.insert(
-        storedOrder
-            .takeWhile((id) => id != ScreenshotActions.mask)
-            .where(keep)
-            .length
-            .clamp(0, order.length),
-        ScreenshotActions.rect,
-      );
-    }
+    final order = storedOrder?.toList();
     Map<String, List<String>>? children;
     if (order != null) {
       children = {
         for (final entry in (storedChildren ?? {}).entries)
-          entry.key as String: (entry.value as List)
-              .cast<String>()
-              .where(keep)
-              .toList(),
+          entry.key as String: (entry.value as List).cast<String>().toList(),
       };
       final placed = {...order, for (final list in children.values) ...list};
       final defaults = ScreenshotActions.composable.keys.toList();
@@ -192,34 +162,20 @@ class ScreenshotToolbarPreferences {
         placed.add(id);
       }
     }
-    final shortcuts = <String, ToolbarShortcut>{};
-    for (final entry in (storedShortcuts ?? {}).entries) {
-      final key = entry.key as String;
-      if (keep(key) && key != ScreenshotActions.mask) {
-        shortcuts[key] = ToolbarShortcut.fromMap(
+    final shortcuts = <String, ToolbarShortcut>{
+      for (final entry in (storedShortcuts ?? {}).entries)
+        entry.key as String: ToolbarShortcut.fromMap(
           Map<Object?, Object?>.from(entry.value as Map),
-        );
-      }
-    }
-    if (!shortcuts.containsKey(ScreenshotActions.rect) &&
-        storedShortcuts?[ScreenshotActions.mask] != null) {
-      shortcuts[ScreenshotActions.rect] = ToolbarShortcut.fromMap(
-        Map<Object?, Object?>.from(
-          storedShortcuts![ScreenshotActions.mask] as Map,
         ),
-      );
-    }
-    final hidden = {...rawHidden}
-      ..remove(ScreenshotActions.mask)
-      ..removeAll(_removed);
-    if (hadMask && !rawHidden.contains(ScreenshotActions.mask)) {
-      hidden.remove(ScreenshotActions.rect);
-    }
+    };
     final result = ScreenshotToolbarPreferences(
       order: order,
       children: children,
       shortcuts: shortcuts,
-      hidden: hidden,
+      hidden:
+          (map[PreferenceKeys.screenshotToolbarHidden] as List?)
+              ?.cast<String>()
+              .toSet(),
     );
     result.validate();
     return result;
