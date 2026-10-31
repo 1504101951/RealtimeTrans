@@ -187,6 +187,9 @@ Map<String, int> stepNumbers(Iterable<EditAnnotation> annotations) {
 
 /// 截图编辑文档：持有源图、裁剪框与平铺标注，并合成导出位图。
 class EditDocument extends ChangeNotifier {
+  /// 拖动预览标注共用的临时 id，提交时由文档分配正式 id。
+  static const _previewAnnotationId = 'preview';
+
   /// 源图；编辑画面、马赛克与取色预览、导出合成共用同一张图，由文档负责释放（#68 批次 A）。
   ui.Image? _source;
   int _width = 0;
@@ -515,20 +518,16 @@ class EditDocument extends ChangeNotifier {
         (a.bottom - b.bottom).abs() < 0.5;
   }
 
-  /// 马赛克栅格缓存所属的源图；源图更换时释放全部缓存（#68）。
-  static ui.Image? _mosaicSource;
+  /// 已提交马赛克标注的栅格图，随标注保存。
+  /// 已知限制：删除的标注要等垃圾回收才释放图片；单次编辑出现明显内存增长时改为文档持有并显式释放。
+  static final Expando<ui.Image> _mosaicTiles = Expando();
 
-  /// 马赛克栅格缓存：网格对齐区域（源图像素）→ 该区域逐块采样后的图片，按最近使用顺序排列。
-  static final Map<Rect, ui.Image> _mosaicTiles = {};
-
-  /// 马赛克栅格缓存的最多张数；超出时释放最久未用的一张。拖动画马赛克时每帧区域都不同，上限防止缓存无界增长。
-  static const _mosaicCacheLimit = 32;
-
-  /// canvas为源图坐标目标，source 为源图；clip为需要遮蔽的源图轨迹，bounds 为其外接矩形；按固定12px网格采样，区域外像素不变，无返回值。
-  /// 网格对齐区域只栅格化一次并缓存，重绘与导出直接绘制缓存图（#68）。
+  /// canvas为源图坐标目标，source 为源图，annotation 为所属标注；clip为需要遮蔽的源图轨迹，bounds 为其外接矩形；
+  /// 按固定12px网格采样，区域外像素不变，无返回值。已提交标注只栅格化一次，重绘与导出直接绘制缓存图（#68）。
   static void _paintMosaic(
     Canvas canvas,
     ui.Image source,
+    EditAnnotation annotation,
     Path clip,
     Rect bounds,
   ) {
@@ -548,20 +547,12 @@ class EditDocument extends ChangeNotifier {
       math.min((area.right / block).ceil() * block, sourceRect.right),
       math.min((area.bottom / block).ceil() * block, sourceRect.bottom),
     );
-    if (!identical(_mosaicSource, source)) {
-      for (final image in _mosaicTiles.values) {
-        image.dispose();
-      }
-      _mosaicTiles.clear();
-      _mosaicSource = source;
-    }
-    // 命中时移到末尾，保持最近使用顺序；未命中时 _rasterMosaic 栅格化该区域。
-    final tiles =
-        _mosaicTiles.remove(region) ?? _rasterMosaic(source, region, block);
-    _mosaicTiles[region] = tiles;
-    if (_mosaicTiles.length > _mosaicCacheLimit) {
-      _mosaicTiles.remove(_mosaicTiles.keys.first)!.dispose();
-    }
+    // 拖动预览每帧都是新标注，不缓存，绘制后释放。
+    final preview = annotation.id == _previewAnnotationId;
+    // _rasterMosaic 栅格化该区域。
+    final tiles = preview
+        ? _rasterMosaic(source, region, block)
+        : _mosaicTiles[annotation] ??= _rasterMosaic(source, region, block);
     canvas.save();
     canvas.clipPath(clip);
     canvas.drawImage(
@@ -572,6 +563,7 @@ class EditDocument extends ChangeNotifier {
         ..isAntiAlias = false,
     );
     canvas.restore();
+    if (preview) tiles.dispose();
   }
 
   /// source 为源图，region 为网格对齐的源图区域，block 为块边长；每块取块中心像素铺满整块，返回与 region 等大的图片。
@@ -693,6 +685,7 @@ class EditDocument extends ChangeNotifier {
           _paintMosaic(
             canvas,
             sourceImage,
+            annotation,
             Path()..addRect(annotation.bounds),
             annotation.bounds,
           );
@@ -749,7 +742,7 @@ class EditDocument extends ChangeNotifier {
               b + normal,
             ], true);
           }
-          _paintMosaic(canvas, sourceImage, clip, clip.getBounds());
+          _paintMosaic(canvas, sourceImage, annotation, clip, clip.getBounds());
           return;
         }
         // 荧光笔整条轨迹一次绘制半透明颜色，同一笔内重叠处不叠加加深（#107）。

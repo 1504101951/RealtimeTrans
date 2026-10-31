@@ -160,7 +160,7 @@ TranslationProgress 只保存已完成分片、配对和上一片双尾；Select
 
 DrawingStyle是标注组合的不可变样式，颜色与线宽控件只返回已确认的值；文档沿用现有命令历史。原生采集在取得前台应用时冻结显示名，不在异步完成后按PID重新查询。
 
-图形工具采用rect配置身份，四种图形、编号标记和普通/马赛克/荧光笔画笔通过同一绘制方法服务预览与PNG导出；浮层选择框不进入像素。`EditDocument.annotations` 只在文档变更（`notifyListeners`）后重建只读视图，画布 `_OverlayPainter` 按视图对象、拖动预览、选中图形、源图、像素倍率与尺寸判断是否重绘，并用 `RepaintBoundary` 与页面其他图层隔离；画笔拖动预览直接引用正在追加的笔迹点（只读视图）与逐点扩展的外接矩形，提交时复制一次。马赛克按 12px 网格对齐区域经 `_rasterMosaic` 栅格化一次并缓存（以源图与区域为键，最多 32 张，源图更换时释放），预览与导出直接绘制缓存图并按轨迹裁剪。编号标记（#107）为 `AnnotationKind.step`，编号不存进标注，由 `stepNumbers` 按文档标注顺序推导后传给 `EditDocument.paintAnnotation`，撤销/重做增删标记后其余编号自然更新。荧光笔为 `ShapeMode.highlighter`，样式颜色保持不透明，绘制时整条轨迹一次施加 40% 不透明度。共享数值在common/constants/drawing_metrics.dart，控件在screenshot/drawing_controls.dart。
+图形工具采用rect配置身份，四种图形、编号标记和普通/马赛克/荧光笔画笔通过同一绘制方法服务预览与PNG导出；浮层选择框不进入像素。`EditDocument.annotations` 只在文档变更（`notifyListeners`）后重建只读视图，画布 `_OverlayPainter` 按视图对象、拖动预览、选中图形、源图、像素倍率与尺寸判断是否重绘，并用 `RepaintBoundary` 与页面其他图层隔离；画笔拖动预览直接引用正在追加的笔迹点（只读视图）与逐点扩展的外接矩形，提交时复制一次。已提交的马赛克标注按 12px 网格对齐区域经 `_rasterMosaic` 栅格化一次，图片随标注保存（`Expando`），标注释放后由垃圾回收释放，重绘与导出直接绘制缓存图并按轨迹裁剪；拖动预览每帧新建标注，不缓存，绘制后立即释放。编号标记（#107）为 `AnnotationKind.step`，编号不存进标注，由 `stepNumbers` 按文档标注顺序推导后传给 `EditDocument.paintAnnotation`，撤销/重做增删标记后其余编号自然更新。荧光笔为 `ShapeMode.highlighter`，样式颜色保持不透明，绘制时整条轨迹一次施加 40% 不透明度。共享数值在common/constants/drawing_metrics.dart，控件在screenshot/drawing_controls.dart。
 
 取色与标尺（#111）是截图编辑器的瞬时状态，由 `screenshot/measure_layer.dart` 的 `MeasureLayer` 叠加在标注之上显示，不进入 `EditDocument`、撤销与导出：取色在每张截图首次使用时把 `EditDocument.source` 读为非预乘 RGBA 并缓存，按悬停或单击处的截图像素读取颜色，经 `copyText` 复制 `#RRGGBB`；标尺只保存两端截图像素。取色悬停点由 `ValueNotifier` 持有，悬停只重建取色标签层，不重建截图页面。确认截图的动作 `screenshotConfirmAction` 由 Swift 随截图快照与工具栏变更通知交给截图引擎。
 

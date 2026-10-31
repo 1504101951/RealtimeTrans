@@ -133,7 +133,7 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
   final TextEditingController _textController = TextEditingController();
   final List<Offset> _strokePoints = [];
 
-  /// 正在画的笔迹的外接矩形；逐点扩展，拖动预览不再每次遍历全部点（#68）。
+  /// 正在画的笔迹的外接矩形；逐点扩展，供拖动预览直接使用（#68）。
   Rect _strokeBounds = Rect.zero;
 
   Map<Object?, Object?> _capture = {};
@@ -3481,7 +3481,7 @@ class _EditorSurfaceState extends State<_EditorSurface> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  // 直接绘制文档源图，与马赛克预览及导出共用，不再解码 PNG。
+                  // 直接绘制文档源图，与马赛克预览及导出共用。
                   RawImage(
                     image: widget.document.source,
                     fit: BoxFit.fill,
