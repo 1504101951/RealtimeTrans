@@ -641,6 +641,43 @@ void main() {
     expect(same.view.overlays, isEmpty);
   });
 
+  test('中文为主的画面里英文段落照常翻译；双向语言时按目标语言分两次请求', () async {
+    // 作用：语言按段落判断，整批以中文为主时不能把英文段落当成已是目标语言。
+    // 边界：未设次要语言时中文段落原样完成、只发英文段落；设次要语言时中英各一个目标语言，共两次请求。
+    /// text 为段落原文；含汉字返回中文，否则返回英文。
+    Future<String?> language(String text) async =>
+        RegExp(r'[㐀-鿿]').hasMatch(text) ? 'zh-Hans' : 'en';
+
+    final provider = ScriptedProvider();
+    final session = LiveRegionSession(
+      providerFor: (_) => provider,
+      detectLanguage: language,
+      clock: ManualClock(),
+    );
+    session.start(_settings(secondary: null), 1);
+    await session.onOcr(_frame(1, ['第一段中文内容', '第二段中文内容', 'replacing signature']));
+    expect(provider.requests, hasLength(1));
+    expect(provider.requests.single.texts, ['replacing signature']);
+    expect(provider.requests.single.detectedLanguage, 'en');
+    expect(provider.requests.single.targetLanguage, 'zh-CN');
+
+    final both = ScriptedProvider();
+    final twoWay = LiveRegionSession(
+      providerFor: (_) => both,
+      detectLanguage: language,
+      clock: ManualClock(),
+    );
+    twoWay.start(_settings(), 1);
+    await twoWay.onOcr(_frame(1, ['第一段中文内容', 'replacing signature']));
+    expect(
+      {for (final request in both.requests) request.targetLanguage: request.texts},
+      {
+        'en': ['第一段中文内容'],
+        'zh-CN': ['replacing signature'],
+      },
+    );
+  });
+
   test('同一段落原文出现在两处时只翻译一次，两处都盖上译文', () async {
     // 作用：重复文字共用一份译文。
     // 边界：请求里该原文只出现一次，盖层数量等于出现次数 2。

@@ -511,7 +511,7 @@ class LiveRegionSession {
   }
 
   /// items 为本批次的段落块，settings 为发送时的偏好。
-  /// 登记在途批次，识别整批语言后向服务发起一次请求。
+  /// 登记在途批次，按段落识别语言后拆分：已是目标语言的直接完成，其余按目标语言各发一次请求。
   void _startBatch(List<_Paragraph> items, AppSettings latest) {
     // 批次绑定发送时的设置副本，之后的偏好修改不影响本批次。
     final settings = AppSettings.fromMap(latest.toMap());
@@ -535,46 +535,58 @@ class LiveRegionSession {
     _beginWork();
     unawaited(() async {
       try {
-        final joined = texts.join('\n');
-        // 整批识别一次。短段落单独识别经常没有结果，中文会被当成要译成主要语言。
-        final detected = await detectLanguage(joined);
+        // _detectEach 按段落给出语言；中文占多数的画面里，英文段落仍要翻译。
+        final detected = await _detectEach(texts);
         if (epoch != _epoch) return;
         if (batch.cancelled) {
           _inflight.remove(batch);
           return;
         }
-        final direction = settings.direction.resolve(
-          detected ?? (_containsCjk(joined) ? 'zh-Hans' : null),
-        );
-        if (LanguageDirection.isTarget(
-          direction.detectedLanguage,
-          direction.targetLanguage,
-        )) {
-          // 已是目标语言时原文即译文，不产生网络请求。
-          for (final (index, text) in texts.indexed) {
-            batch.partial[index].write(text);
+        // 按目标语言分组；已是目标语言的归入 same，原文即译文。
+        final same = <int>[];
+        final groups = <String, List<int>>{};
+        final sources = <String, String?>{};
+        for (final (index, language) in detected.indexed) {
+          final direction = settings.direction.resolve(language);
+          if (LanguageDirection.isTarget(
+            direction.detectedLanguage,
+            direction.targetLanguage,
+          )) {
+            same.add(index);
+            continue;
           }
-          _complete(batch);
-          return;
+          (groups[direction.targetLanguage] ??= []).add(index);
+          // 同组语言不一致时不声明来源语言，由服务自行判断。
+          final source = sources.containsKey(direction.targetLanguage)
+              ? sources[direction.targetLanguage]
+              : direction.detectedLanguage;
+          sources[direction.targetLanguage] =
+              source == direction.detectedLanguage ? source : null;
         }
-        batch.subscription = providerFor(settings)
-            .translateBatch(
-              BatchTranslationRequest(
-                texts: texts,
-                detectedLanguage: direction.detectedLanguage,
-                targetLanguage: direction.targetLanguage,
-              ),
-              client: _client!,
-            )
-            .listen(
-              (event) => _onEvent(batch, event),
-              onError: (Object error) {
-                _onEvent(
-                  batch,
-                  BatchFailure('$error', TranslationFailureKind.transient),
-                );
-              },
-            );
+        /// indexes 为原批次下标；返回只含这些段落、沿用原批次时间的子批次。
+        _Batch part(List<int> indexes) => _Batch(
+          [for (final index in indexes) batch.texts[index]],
+          [for (final index in indexes) batch.keys[index]],
+          batch.startedAt,
+          batch.wait,
+        );
+        // 子批次全部登记后才结束任何一个，否则结束时的重新评估会把其余段落再发一次。
+        _inflight.remove(batch);
+        final passthrough = same.isEmpty ? null : part(same);
+        final requests = {
+          for (final entry in groups.entries) entry.key: part(entry.value),
+        };
+        _inflight.addAll([?passthrough, ...requests.values]);
+        if (passthrough != null) {
+          // 已是目标语言时原文即译文，不产生网络请求。
+          for (final (index, text) in passthrough.texts.indexed) {
+            passthrough.partial[index].write(text);
+          }
+          _complete(passthrough);
+        }
+        for (final MapEntry(key: target, value: request) in requests.entries) {
+          _request(request, settings, sources[target], target);
+        }
       } catch (_) {
         // 语言识别或创建请求抛错时按临时失败收口：移出在途集合并交给重试逻辑，
         // 不让批次一直占用名额、界面停在「正在翻译」（#116）。
@@ -589,6 +601,38 @@ class LiveRegionSession {
         _endWork(epoch);
       }
     }());
+  }
+
+  /// batch 为已登记的批次，settings 为发送时的偏好，detected 为来源语言（可为空），target 为目标语言。
+  /// 向服务发起一次请求；创建请求抛错时按临时失败收口，无返回值。
+  void _request(
+    _Batch batch,
+    AppSettings settings,
+    String? detected,
+    String target,
+  ) {
+    try {
+      batch.subscription = providerFor(settings)
+          .translateBatch(
+            BatchTranslationRequest(
+              texts: batch.texts,
+              detectedLanguage: detected,
+              targetLanguage: target,
+            ),
+            client: _client!,
+          )
+          .listen(
+            (event) => _onEvent(batch, event),
+            onError: (Object error) {
+              _onEvent(
+                batch,
+                BatchFailure('$error', TranslationFailureKind.transient),
+              );
+            },
+          );
+    } catch (_) {
+      _fail(batch, '翻译准备失败，将自动重试。', TranslationFailureKind.transient);
+    }
   }
 
   void _onEvent(_Batch batch, BatchTranslationEvent event) {
@@ -779,8 +823,33 @@ class LiveRegionSession {
     (batch) => !batch.cancelled && batch.texts.contains(text),
   );
 
-  /// text 含汉字时，语言识别失败也按中文处理，避免再译成中文。
+  /// text 为段落原文；返回是否含汉字。
   bool _containsCjk(String text) => RegExp(r'[㐀-鿿]').hasMatch(text);
+
+  /// texts 为一批段落原文；返回逐段语言，无法识别时为 null。
+  /// 含汉字的段落合并识别一次：短段落单独识别经常没有结果，识别失败时按中文处理，避免再译成中文；
+  /// 合并识别也保留日文等含汉字语言的判断。不含汉字的段落逐段识别，识别不出的用它们合并后的结果。
+  Future<List<String?>> _detectEach(List<String> texts) async {
+    final hanzi = texts.where(_containsCjk).toList();
+    final others = [
+      for (final text in texts)
+        if (!_containsCjk(text)) text,
+    ];
+    final hanziLanguage = hanzi.isEmpty
+        ? null
+        : await detectLanguage(hanzi.join('\n')) ?? 'zh-Hans';
+    final each = await Future.wait(others.map(detectLanguage));
+    final merged = each.contains(null)
+        ? await detectLanguage(others.join('\n'))
+        : null;
+    final languages = {
+      for (final (index, text) in others.indexed) text: each[index] ?? merged,
+    };
+    return [
+      for (final text in texts)
+        _containsCjk(text) ? hanziLanguage : languages[text],
+    ];
+  }
 
   /// 无参数；返回控制条显示的状态。
   String _status() {
