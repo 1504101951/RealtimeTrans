@@ -1107,25 +1107,25 @@ final class CaptureMediaTests: XCTestCase {
         }
     }
 
-    /// 无参数；滚轮途径按像素步进：单步目标为选区高度的 25%，放大最多 1.5 倍，接缝失败后目标减半，像素取整且至少 1px（#112）。
-    /// 边界：选区高 1000px 目标 250px，首步 62.5px；移动 250px 后 62.5×250/250=62.5 不放大；
-    /// 移动 25px 后应放大到 625，被 1.5 倍截到 93.75；接缝失败后步长减半、目标 125；0.2 取整为下限 1。
-    func testAutoScrollWheelPlanStepsInPixels() {
+    /// 无参数；方向键途径按次数步进：单步目标为选区高度的 25%，放大最多 1.5 倍，接缝失败后目标减半，次数取整并限制范围（#112）。
+    /// 边界：选区高 1000px 目标 250px，首步 2 次；移动 500px 后 2×250/500=1 次；
+    /// 移动 25px 后应放大到 10 次，被 1.5 倍截到 1.5；接缝失败后步长减半、目标 125；次数下限 1、上限 40。
+    func testAutoScrollKeyPlanStepsInPresses() {
         let start = ContinuousClock.now
         let at = { (ms: Int) in start.advanced(by: .milliseconds(ms)) }
-        var plan = AutoScrollPlan.wheel(height: 1000)
-        XCTAssertEqual(plan.start(now: at(0)), .scroll(by: 62.5))
-        XCTAssertEqual(plan.frame(shift: 250, now: at(100)), .wait)
+        var plan = AutoScrollPlan.keys(height: 1000)
+        XCTAssertEqual(plan.start(now: at(0)), .scroll(by: 2))
+        XCTAssertEqual(plan.frame(shift: 500, now: at(100)), .wait)
         XCTAssertEqual(plan.frame(shift: 0, now: at(200)), .wait)
-        XCTAssertEqual(plan.frame(shift: 0, now: at(300)), .scroll(by: 62.5))
+        XCTAssertEqual(plan.frame(shift: 0, now: at(300)), .scroll(by: 1))
         XCTAssertEqual(plan.frame(shift: 25, now: at(400)), .wait)
         XCTAssertEqual(plan.frame(shift: 0, now: at(500)), .wait)
-        XCTAssertEqual(plan.frame(shift: 0, now: at(600)), .scroll(by: 93.75))
+        XCTAssertEqual(plan.frame(shift: 0, now: at(600)), .scroll(by: 1.5))
         XCTAssertEqual(plan.mismatch(now: at(700)), .rewind)
         XCTAssertEqual(plan.target, 125)
-        XCTAssertEqual(plan.step, 46.875)
-        XCTAssertEqual(AutoScrollWheel.pixels(0.2), 1)
-        XCTAssertEqual(AutoScrollWheel.pixels(249.6), 250)
+        XCTAssertEqual(plan.step, 0.75)
+        XCTAssertEqual(AutoScrollKeys.presses(0.2), 1)
+        XCTAssertEqual(AutoScrollKeys.presses(99), 40)
     }
 
     /// 无参数；自动滚动步进：画面移动后连续 2 帧静止才滚下一步，按实测位移校准增量且最多放大 4 倍（#112）。

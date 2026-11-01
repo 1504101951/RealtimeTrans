@@ -688,10 +688,6 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
             if automatic { watchScrollTakeover() }
             // configuration 已按实际采集范围设置 captureFrame。
             let center = CaptureGeometry.cgPoint(fromAppKitPoint: NSPoint(x: captureFrame!.midX, y: captureFrame!.midY))
-            // 滚轮途径用 CG 坐标的选区判断指针位置；AppKit 的上边对应 CG 的原点。
-            let selection = CGRect(
-                origin: CaptureGeometry.cgPoint(fromAppKitPoint: NSPoint(x: captureFrame!.minX, y: captureFrame!.maxY)),
-                size: captureFrame!.size)
             update(.scrolling, ["height": config.height, "width": config.width, "frames": 0])
             scrollTask = Task.detached { [weak self] in
                 guard let self else { return }
@@ -701,12 +697,12 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
                 var lastHint: ContinuousClock.Instant?
                 // 自动滚动：plan 计算步进，target 在首次开始时按选区中心解析，driving 为本轮是否正由 App 滚动，
                 // previousValue 为最近一步之前的滚动条值，供接缝失败时退回；
-                // wheel 为滚轮途径，barRejected 表示滚动条途径已失败，不再尝试。
+                // keys 为方向键途径，barRejected 表示滚动条途径已失败，不再尝试。
                 var plan = AutoScrollPlan(height: config.height)
                 var target: AutoScrollTarget?
                 var driving = false
                 var previousValue: Double?
-                var wheel: AutoScrollWheel?
+                var keys: AutoScrollKeys?
                 var barRejected = false
                 // 缩略图只在确认帧数或回退目标状态变化时重绘。
                 var previewFrames = 0
@@ -784,42 +780,37 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
                             if state.2, !driving, stitcher.acceptedFrames > 0 {
                                 let trusted = AXIsProcessTrusted()
                                 // AutoScrollTarget 在选区中心命中来源窗口并找到可设置的纵向滚动条。
-                                if target == nil, wheel == nil, !barRejected, trusted { target = AutoScrollTarget(point: center) }
-                                // 没有可用滚动条时改走滚轮途径，步进按像素重新校准。
-                                if target == nil, wheel == nil, trusted {
-                                    wheel = AutoScrollWheel(frame: selection, source: AutoScrollTarget.sourceWindow(at: center))
-                                    plan = .wheel(height: config.height)
+                                if target == nil, keys == nil, !barRejected, trusted { target = AutoScrollTarget(point: center) }
+                                // 没有可用滚动条时改走方向键途径，步进按按键次数重新校准。
+                                if target == nil, keys == nil, trusted,
+                                   let pid = AutoScrollTarget.sourceProcess(at: center) {
+                                    keys = AutoScrollKeys(pid: pid)
+                                    plan = .keys(height: config.height)
                                 }
                                 if let target {
                                     driving = true
                                     // 已在底部时直接按到底处理，不误报不支持。
                                     action = (target.value ?? 0) >= 0.999 ? .bottom : plan.start(now: clock.now)
-                                } else if let wheel {
-                                    wheel.prepare()
+                                } else if keys != nil {
                                     driving = true
                                     action = plan.start(now: clock.now)
                                 } else {
-                                    await self.endAutoScroll(token: token, hint: "自动滚动需要辅助功能权限，已改为手动滚动")
+                                    await self.endAutoScroll(token: token, hint: trusted
+                                        ? MediaCaptureService.unsupportedScrollHint : "自动滚动需要辅助功能权限，已改为手动滚动")
                                 }
                             }
                             switch action {
                             case .wait:
                                 break
                             case .scroll(let step):
-                                if wheel != nil {
-                                    // 滚轮只作用于指针下的窗口：指针移出选区时暂停，不追回指针。
-                                    guard wheel?.pointerInside == true else {
-                                        driving = false
-                                        await self.pauseForPointer(token: token)
-                                        break
-                                    }
-                                    if wheel?.scroll(by: step) != true {
+                                if keys != nil {
+                                    if keys?.scroll(by: step) != true {
                                         driving = false
                                         await self.endAutoScroll(token: token, hint: MediaCaptureService.unsupportedScrollHint)
                                     }
                                     break
                                 }
-                                // 记住本步之前的位置供退回，再写入新的滚动条值；读取或写入失败换滚轮途径，
+                                // 记住本步之前的位置供退回，再写入新的滚动条值；读取或写入失败换方向键途径，
                                 // 避免画面不动被误判为到底（#112）。
                                 previousValue = target?.value
                                 guard let target, let previousValue, target.set(previousValue + step) else {
@@ -829,13 +820,8 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
                                     break
                                 }
                             case .rewind:
-                                if let wheel {
-                                    guard wheel.pointerInside else {
-                                        driving = false
-                                        await self.pauseForPointer(token: token)
-                                        break
-                                    }
-                                    if !wheel.rewind() {
+                                if let keys {
+                                    if !keys.rewind() {
                                         driving = false
                                         await self.endAutoScroll(token: token, hint: MediaCaptureService.unsupportedScrollHint)
                                     }
@@ -855,12 +841,10 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
                                 }
                             case .unsupported:
                                 driving = false
-                                // 依次换途径：滚动条 → 投给来源进程的滚轮 → 指针位置的滚轮；都不动才改为手动。
+                                // 滚动条不起作用时下一帧换方向键途径；方向键也不动才改为手动。
                                 if target != nil {
                                     target = nil
                                     barRejected = true
-                                } else if wheel?.fallBackToPointer() == true {
-                                    plan = .wheel(height: config.height)
                                 } else {
                                     await self.endAutoScroll(token: token, hint: MediaCaptureService.unsupportedScrollHint)
                                 }
@@ -914,14 +898,8 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
         update(target ?? phase, ["hint": text, "hintIsError": isError, "hintSerial": scrollHintSerial])
     }
 
-    /// 滚动条与滚轮途径都无法让来源滚动时的提示（#112）。
+    /// 滚动条与方向键途径都无法让来源滚动时的提示（#112）。
     private static let unsupportedScrollHint = "该区域无法自动滚动，已改为手动滚动"
-
-    /// token为会话身份；滚轮途径下指针移出选区时暂停并提示，「继续」把指针移回选区后恢复，无返回值（#112）。
-    private func pauseForPointer(token: String) {
-        guard id == token, phase == .scrolling else { return }
-        showScrollHint("指针移出选区，已暂停", isError: false, phase: .paused)
-    }
 
     /// token为会话身份，hint为改为手动的原因；本次会话改为手动滚动并显示错误提示，移除接管监听，无返回值（#112）。
     private func endAutoScroll(token: String, hint: String) {
@@ -933,10 +911,9 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
     }
 
     /// 无参数；自动滚动期间安装只读全局滚轮监听：用户在采集选区内滚动时本次改为手动并提示，选区外滚动不影响（#112）。
-    /// 带 AutoScrollWheel 标记的事件是自动滚动自身发出的，不算接管；监听不消费事件。
+    /// 自动滚动只写滚动条值或发送方向键，不产生滚轮事件，监听到的都是用户操作；监听不消费事件。
     private func watchScrollTakeover() {
-        scrollWheelMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-            guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != AutoScrollWheel.marker else { return }
+        scrollWheelMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] _ in
             let location = NSEvent.mouseLocation
             Task { @MainActor in
                 guard let self, self.autoScrollActive, self.phase == .scrolling,

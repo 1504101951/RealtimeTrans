@@ -8,7 +8,7 @@ struct AutoScrollPlan {
     enum Action: Equatable {
         /// 继续采样，不滚动。
         case wait
-        /// 按该增量继续滚动：滚动条途径为 0–1 范围内的比例，滚轮途径为像素。
+        /// 按该增量继续滚动：滚动条途径为 0–1 范围内的比例，方向键途径为按键次数。
         case scroll(by: Double)
         /// 本步跨出可配准范围：退回本步之前的位置。
         case rewind
@@ -26,14 +26,14 @@ struct AutoScrollPlan {
     static let bottomWait: Duration = .milliseconds(1500)
     /// 滚动条途径的首步增量；之后按实测位移校准。
     static let initialStep = 0.01
-    /// 滚轮途径的首步像素占单步目标的比例；较小的首步避免跨出可配准范围。
-    static let initialWheelRatio = 0.25
+    /// 方向键途径的首步按键次数；之后按实测位移校准。
+    static let initialKeyPresses = 2.0
 
-    /// 单步目标位移（像素）：滚动条途径为选区高度的 50%，滚轮途径为 25%。
+    /// 单步目标位移（像素）：滚动条途径为选区高度的 50%，方向键途径为 25%。
     private(set) var target: Int
-    /// 校准时单步最多放大的倍数；滚轮途径在中途采样时容易少计位移，放大更保守。
+    /// 校准时单步最多放大的倍数；方向键途径在中途采样时容易少计位移，放大更保守。
     private var growth = 4.0
-    /// 接缝失败时目标位移是否一并减半；滚轮途径用它避免校准后再次跨出可配准范围。
+    /// 接缝失败时目标位移是否一并减半；方向键途径用它避免校准后再次跨出可配准范围。
     private var shrinksTarget = false
     /// 下一步的滚动条增量。
     private(set) var step: Double
@@ -53,11 +53,10 @@ struct AutoScrollPlan {
         self.step = step
     }
 
-    /// height为选区像素高度；返回滚轮途径的步进计划：单步目标为选区高度的 25%，首步为目标的 25%。
-    static func wheel(height: Int) -> AutoScrollPlan {
-        var plan = AutoScrollPlan(height: height)
+    /// height为选区像素高度；返回方向键途径的步进计划：单步目标为选区高度的 25%。
+    static func keys(height: Int) -> AutoScrollPlan {
+        var plan = AutoScrollPlan(height: height, step: initialKeyPresses)
         plan.target = max(1, height / 4)
-        plan.step = max(1, Double(plan.target) * initialWheelRatio)
         plan.growth = 1.5
         plan.shrinksTarget = true
         return plan
@@ -115,75 +114,47 @@ struct AutoScrollPlan {
     }
 }
 
-/// 自动滚动的滚轮途径（#112）：Chromium 等不暴露可写滚动条的来源使用合成像素滚轮。
-/// 优先直接投给来源进程，与鼠标互不影响；来源不响应时改为在指针位置发送，此时滚轮只作用于指针下的窗口。
-/// 不带滚动阶段，来源一步滚到位，便于采样停稳；调用方须已确认辅助功能权限。
-struct AutoScrollWheel {
-    /// 写入 eventSourceUserData 的标记，接管监听据此区分用户滚动与自动滚动。
-    static let marker: Int64 = 0x5C40_112
+/// 自动滚动的方向键途径（#112）：Chromium 等不暴露可写滚动条的来源，把方向键直接投给来源进程。
+/// 不产生鼠标事件，指针不动，用户可随意移动鼠标；调用方须已确认辅助功能权限。
+/// 已知限制：按键进入来源当前焦点，焦点在输入框时画面不滚动，首步不动后改为手动；
+/// 需要支持这类页面时重新评估滚动途径。
+struct AutoScrollKeys {
+    /// 向下、向上方向键的虚拟键码。
+    private static let downKey: CGKeyCode = 125
+    private static let upKey: CGKeyCode = 126
+    /// 单步最多按键次数，避免校准异常时一次跨出可配准范围。
+    private static let maximumPresses = 40
 
-    /// 采集选区，CG 全局坐标（左上原点）。
-    let frame: CGRect
-    /// 来源进程与窗口；nil 表示在指针位置发送。
-    private(set) var source: (pid: pid_t, window: CGWindowID)?
-    /// 最近一步向下滚动的像素，供接缝失败时退回。
-    private var last: Int32 = 0
+    /// 来源进程。
+    let pid: pid_t
+    /// 最近一步的按键次数，供接缝失败时退回。
+    private var last = 0
 
-    /// frame为采集选区，CG 全局坐标；source 为选区中心处的来源窗口，未找到时在指针位置发送。
-    init(frame: CGRect, source: (pid: pid_t, window: CGWindowID)?) {
-        self.frame = frame
-        self.source = source
-    }
+    /// pid为选区下来源窗口的进程。
+    init(pid: pid_t) { self.pid = pid }
 
-    /// 无参数；来源进程不响应投递时改为在指针位置发送，返回是否发生了切换。
-    mutating func fallBackToPointer() -> Bool {
-        guard source != nil else { return false }
-        source = nil
-        return true
-    }
-
-    /// 无参数；返回当前能否发送：投给进程时始终可以，指针位置发送要求指针在选区内。
-    var pointerInside: Bool {
-        source != nil || CGEvent(source: nil).map { frame.contains($0.location) } ?? false
-    }
-
-    /// 无参数；开始或恢复一轮滚动：指针位置发送且指针在选区外时移到选区中心，无返回值。
-    func prepare() {
-        guard !pointerInside else { return }
-        CGWarpMouseCursorPosition(CGPoint(x: frame.midX, y: frame.midY))
-        // 恢复指针与鼠标的关联，否则系统会短暂忽略用户移动。
-        CGAssociateMouseAndMouseCursorPosition(1)
-    }
-
-    /// step 为向下滚动的像素，取整后至少 1px；返回事件是否已发送。
+    /// step 为校准后的按键次数；发送向下方向键，返回事件是否已发送。
     mutating func scroll(by step: Double) -> Bool {
-        let pixels = Self.pixels(step)
-        guard post(-pixels) else { return false }
-        last = pixels
+        let presses = Self.presses(step)
+        guard press(Self.downKey, count: presses) else { return false }
+        last = presses
         return true
     }
 
-    /// 无参数；向上滚回最近一步，返回事件是否已发送。
-    func rewind() -> Bool { post(last) }
+    /// 无参数；按相同次数发送向上方向键退回最近一步，返回事件是否已发送。
+    func rewind() -> Bool { press(Self.upKey, count: last) }
 
-    /// step 为校准后的增量；返回滚轮像素：取整、至少 1px、不超过 Int32 范围。
-    static func pixels(_ step: Double) -> Int32 { Int32(min(Double(Int32.max), max(1, step.rounded()))) }
+    /// step 为校准后的增量；返回按键次数：取整，限制在 1 到 maximumPresses。
+    static func presses(_ step: Double) -> Int { min(maximumPresses, max(1, Int(step.rounded()))) }
 
-    /// delta 为滚轮像素，负数向下；发送标记事件：投给来源进程，或在指针当前位置发送；返回事件是否已创建并发送。
-    private func post(_ delta: Int32) -> Bool {
-        guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0),
-              let pointer = CGEvent(source: nil)?.location else { return false }
-        event.setIntegerValueField(.eventSourceUserData, value: Self.marker)
-        guard let source else {
-            event.location = pointer
-            event.post(tap: .cghidEventTap)
-            return true
+    /// key 为虚拟键码，count 为次数；向来源进程发送按下与抬起，返回事件是否都已创建并发送。
+    private func press(_ key: CGKeyCode, count: Int) -> Bool {
+        for _ in 0..<count {
+            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: false) else { return false }
+            down.postToPid(pid)
+            up.postToPid(pid)
         }
-        // 窗口字段告诉来源事件属于哪个窗口，来源在后台时也能路由到选区下的内容。
-        event.location = CGPoint(x: frame.midX, y: frame.midY)
-        event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(source.window))
-        event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(source.window))
-        event.postToPid(source.pid)
         return true
     }
 }
@@ -193,8 +164,8 @@ struct AutoScrollWheel {
 final class AutoScrollTarget {
     private let bar: AXUIElement
 
-    /// point为 CG 全局坐标（左上原点）；返回该点最上层、非本应用普通窗口的进程与窗口号，找不到时返回 nil。
-    static func sourceWindow(at point: CGPoint) -> (pid: pid_t, window: CGWindowID)? {
+    /// point为 CG 全局坐标（左上原点）；返回该点最上层、非本应用普通窗口的进程，找不到时返回 nil。
+    static func sourceProcess(at point: CGPoint) -> pid_t? {
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         let own = ProcessInfo.processInfo.processIdentifier
         // 窗口列表按前后顺序排列；第 0 层是普通应用窗口，采集遮罩等本应用窗口不参与。
@@ -204,14 +175,12 @@ final class AutoScrollTarget {
                   let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
             return rect.contains(point)
         }
-        guard let pid = owner?[kCGWindowOwnerPID as String] as? pid_t,
-              let window = owner?[kCGWindowNumber as String] as? CGWindowID else { return nil }
-        return (pid, window)
+        return owner?[kCGWindowOwnerPID as String] as? pid_t
     }
 
     /// point为 CG 全局坐标（左上原点）；返回该点来源窗口内可设置值的纵向滚动条，找不到时返回 nil。
     init?(point: CGPoint) {
-        guard let pid = Self.sourceWindow(at: point)?.pid else { return nil }
+        guard let pid = Self.sourceProcess(at: point) else { return nil }
         var hit: AXUIElement?
         guard AXUIElementCopyElementAtPosition(AXUIElementCreateApplication(pid), Float(point.x), Float(point.y), &hit) == .success,
               var current = hit else { return nil }
