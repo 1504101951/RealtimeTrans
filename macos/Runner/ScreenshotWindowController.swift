@@ -253,14 +253,6 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         captureId == id
     }
 
-    /// payload 为导出图 PNG；写入系统剪贴板，返回是否写入成功。
-    private func writePNG(_ payload: Data) -> Bool {
-        let item = NSPasteboardItem()
-        item.setData(payload, forType: .png)
-        pasteboard.clearContents()
-        return pasteboard.writeObjects([item])
-    }
-
     /// id 为本次截图身份，payload 为导出成功的 PNG；先向主引擎查询「记录截图历史」开关（不带图片），
     /// 开启时才把图片与截图时间交主引擎写入，关闭时整图不跨引擎；不等待写入结果，无返回值（#68）。
     private func recordHistory(id: String, payload: Data) {
@@ -573,8 +565,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             switch call.method {
             case AppConstants.copyScreenshotMethod:
                 defer { PerformanceLog.record("export-copy", since: exportStart) }
-                // writePNG 把导出图写入系统剪贴板。
-                guard writePNG(payload) else {
+                guard PNGPasteboard.write(payload, to: pasteboard) else {
                     result(FlutterError(code: AppConstants.copyFailedError, message: "无法复制截图，请重试。", details: nil))
                     return
                 }
@@ -596,7 +587,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
                         // 写盘期间截图已被替换：文件已保存，剪贴板与历史属于旧截图，不再写入。
                         guard id == self.captureId else { result(url.path); return }
                         // 复制并保存在保存成功后写剪贴板，图片只经通道传一次；复制失败时已保存的文件保留（#68）。
-                        if copies, !self.writePNG(payload) {
+                        if copies, !PNGPasteboard.write(payload, to: self.pasteboard) {
                             result(FlutterError(code: AppConstants.copyFailedError, message: "无法复制截图，请重试。", details: nil))
                             return
                         }

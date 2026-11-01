@@ -138,25 +138,15 @@ class ApiTranslationProvider implements BatchTranslationProvider {
       if (active && !output.isClosed) output.add(event);
     }
 
-    /// 无参数；读取内存凭据后执行单次协议请求，结束时发布完成事件。
+    /// 无参数；读取钥匙串凭据后执行单次协议请求，结束时发布完成事件。
     Future<void> run() async {
-      final Map<String, String> secret;
-      try {
-        // _validateRequest 校验服务配置与本模式的思考预算。
-        _validateRequest();
-        secret = await credentials();
-        config.validateCredentials(secret);
-      } on FormatException catch (error) {
-        // 配置或凭据校验的提示原样显示，不替换成通用失败（#123）。
-        throw _ApiFailure(error.message, kind: TranslationFailureKind.service);
-      }
+      // _readSecret 校验配置并读取钥匙串凭据。
+      final secret = await _readSecret();
       if (!active) return;
       // translationHttpClient 为应用共享客户端，复用与服务之间的连接。
-      final http = await translationHttpClient.postUrl(_endpoint());
+      final http = await _open(translationHttpClient);
       pending = http;
       if (!active) return;
-      // 不随重定向把凭据或原文发送到另一个地址。
-      http.followRedirects = false;
       switch (config.kind) {
         case 'baidu':
           _writeBaidu(
@@ -316,22 +306,12 @@ class ApiTranslationProvider implements BatchTranslationProvider {
 
     /// 无参数；执行一次批量请求，结束时发布整批完成事件。
     Future<void> run() async {
-      final Map<String, String> secret;
-      try {
-        // _validateRequest 校验服务配置与本模式的思考预算。
-        _validateRequest();
-        secret = await credentials();
-        config.validateCredentials(secret);
-      } on FormatException catch (error) {
-        // 配置或凭据不合法不会因重试而改变。
-        throw _ApiFailure(error.message, kind: TranslationFailureKind.service);
-      }
+      // _readSecret 校验配置并读取钥匙串凭据。
+      final secret = await _readSecret();
       if (!active) return;
-      final http = await client.postUrl(_endpoint());
+      final http = await _open(client);
       pending = http;
       if (!active) return;
-      // 不随重定向把凭据或原文发送到另一个地址。
-      http.followRedirects = false;
       // 一行只放一个段落，换行才能作为段落边界。
       final lines = [
         for (final text in request.texts) singleLineParagraph(text),
@@ -448,6 +428,28 @@ class ApiTranslationProvider implements BatchTranslationProvider {
       return additions?.cancel();
     };
     return output.stream;
+  }
+
+  /// 无参数；校验服务配置、思考预算与凭据，返回钥匙串凭据。
+  /// 校验提示原样显示，不替换成通用失败；配置或凭据不合法不会因重试而改变（#123）。
+  Future<Map<String, String>> _readSecret() async {
+    try {
+      // _validateRequest 校验服务配置与本模式的思考预算。
+      _validateRequest();
+      final secret = await credentials();
+      config.validateCredentials(secret);
+      return secret;
+    } on FormatException catch (error) {
+      throw _ApiFailure(error.message, kind: TranslationFailureKind.service);
+    }
+  }
+
+  /// client 为发送请求的 HTTP 客户端；返回指向本服务的 POST 请求。
+  Future<HttpClientRequest> _open(HttpClient client) async {
+    final http = await client.postUrl(_endpoint());
+    // 不随重定向把凭据或原文发送到另一个地址。
+    http.followRedirects = false;
+    return http;
   }
 
   /// 无参数；返回本服务的请求地址，服务类型不受支持时抛服务级失败。

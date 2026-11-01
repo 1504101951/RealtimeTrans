@@ -1,4 +1,4 @@
-/// Dart 使用的平台方法名协议值；与 Swift AppConstants 同名值字面量一致，改名须两端同步。
+/// Dart 使用的平台方法名协议值；Swift AppConstants 也定义的值字面量一致，改名须两端同步，跨引擎方法经原生通用转发，Swift 不需要字面量。
 abstract final class MethodNames {
   /// 初始化绑定并提交附属窗口 widget 后确认入口已执行。
   static const windowReady = 'windowReady';

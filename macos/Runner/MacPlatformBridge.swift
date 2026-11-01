@@ -126,13 +126,13 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
                   let x = args["x"] as? Double,
                   let y = args["y"] as? Double
             else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "showOverlay 需要 sessionId/x/y", details: nil))
+                result(Self.badArguments("showOverlay 需要 sessionId/x/y"))
                 return
             }
             guard currentSessionId == sessionId else { result(nil); return }
             guard let width = args["width"] as? Double, let height = args["height"] as? Double,
                   x.isFinite, y.isFinite, width.isFinite, height.isFinite, width > 0, height > 0 else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "Overlay 坐标和尺寸必须有效", details: nil))
+                result(Self.badArguments("Overlay 坐标和尺寸必须有效"))
                 return
             }
             // 显示前再次核对会话，失效后迟到的 Dart 指令不能重新弹窗。
@@ -144,14 +144,14 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             result(nil)
         case AppConstants.retainOverlayMethod:
             guard let sessionId = args["sessionId"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "retainOverlay 需要 sessionId", details: nil)); return
+                result(Self.badArguments("retainOverlay 需要 sessionId")); return
             }
             // 展开由显式翻译触发，之后被动选区和前台变化只影响新的采集。
             if currentSessionId == sessionId { retainsResult = true }
             result(nil)
         case AppConstants.hideOverlayMethod:
             guard let sessionId = args["sessionId"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "hideOverlay 需要 sessionId", details: nil))
+                result(Self.badArguments("hideOverlay 需要 sessionId"))
                 return
             }
             guard currentSessionId == sessionId else { result(nil); return }
@@ -169,19 +169,19 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
                   let width = args["width"] as? Double,
                   let height = args["height"] as? Double
             else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "setOverlaySize 需要 sessionId/width/height", details: nil))
+                result(Self.badArguments("setOverlaySize 需要 sessionId/width/height"))
                 return
             }
             guard currentSessionId == sessionId else { result(nil); return }
             guard width.isFinite, height.isFinite, width > 0, height > 0 else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "Overlay 尺寸必须为正数", details: nil))
+                result(Self.badArguments("Overlay 尺寸必须为正数"))
                 return
             }
             overlay.resize(sessionId: sessionId, size: NSSize(width: width, height: height))
             result(nil)
         case AppConstants.dragOverlayMethod:
             guard let sessionId = args["sessionId"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "dragOverlay 需要 sessionId", details: nil))
+                result(Self.badArguments("dragOverlay 需要 sessionId"))
                 return
             }
             // Flutter 区分拖动与点击，AppKit 负责实际移动且不激活应用。
@@ -189,7 +189,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             result(nil)
         case AppConstants.readSelectionForTranslationMethod:
             guard let sessionId = args["sessionId"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "读取选区需要 sessionId", details: nil)); return
+                result(Self.badArguments("读取选区需要 sessionId")); return
             }
             guard currentSessionId == sessionId, let pid = sourceProcessIdentifier else { result(nil); return }
             selectionReadTask?.cancel()
@@ -201,7 +201,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             }
         case AppConstants.replaceSelectionMethod:
             guard let sessionId = args["sessionId"] as? String, let text = args["text"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "替换选区需要 sessionId/text", details: nil)); return
+                result(Self.badArguments("替换选区需要 sessionId/text")); return
             }
             // 只替换仍属于本会话、仍在前台且未开启安全输入的来源应用；返回 nil 表示已替换，字符串为未替换原因（#99）。
             guard currentSessionId == sessionId, let pid = sourceProcessIdentifier else {
@@ -224,7 +224,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             }
         case AppConstants.showInputFailureMethod:
             guard let sessionId = args["sessionId"] as? String, let message = args["message"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "showInputFailure 需要 sessionId/message", details: nil)); return
+                result(Self.badArguments("showInputFailure 需要 sessionId/message")); return
             }
             // 只为仍属于当前输入翻译的会话显示；锚点在读取完成时取得（#99）。
             if currentSessionId == sessionId, let inputAnchor {
@@ -233,7 +233,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             result(nil)
         case AppConstants.isCurrentScreenshotMethod:
             guard let id = args["id"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "核对截图需要 id", details: nil)); return
+                result(Self.badArguments("核对截图需要 id")); return
             }
             // 翻译结果落库前核对原生生命周期，关闭的截图不得产生历史。
             // 只查询捕获身份，不向主引擎传输第二份截图数据。
@@ -278,12 +278,12 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
                         "height": image.height,
                     ])
                 } catch {
-                    result(FlutterError(code: AppConstants.badArgsError, message: error.localizedDescription, details: nil))
+                    result(Self.badArguments(error.localizedDescription))
                 }
             }
         case AppConstants.saveStickerMethod:
             guard let id = args["id"] as? String, let bytes = args["bytes"] as? FlutterStandardTypedData else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "保存贴纸需要 id/bytes", details: nil)); return
+                result(Self.badArguments("保存贴纸需要 id/bytes")); return
             }
             do {
                 // 贴纸目录在首次保存时创建；文件名即贴纸 id。
@@ -292,14 +292,14 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
                 try bytes.data.write(to: url, options: .atomic)
                 result(url.path)
             } catch {
-                result(FlutterError(code: AppConstants.badArgsError, message: error.localizedDescription, details: nil))
+                result(Self.badArguments(error.localizedDescription))
             }
         case AppConstants.stickerDirectoryMethod:
             // 设置页按目录与 id 显示缩略图（#103）。
             result(AppConstants.stickersURL.path)
         case AppConstants.deleteStickerMethod:
             guard let id = args["id"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "删除贴纸需要 id", details: nil)); return
+                result(Self.badArguments("删除贴纸需要 id")); return
             }
             try? FileManager.default.removeItem(at: AppConstants.stickersURL.appendingPathComponent("\(id).png"))
             result(nil)
@@ -311,7 +311,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             applySettings(settings, credentials: credentials, result: result)
         case AppConstants.readCredentialsMethod:
             guard let id = args["id"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "缺少服务标识。", details: nil)); return
+                result(Self.badArguments("缺少服务标识。")); return
             }
             // 钥匙串读取耗时写入性能日志，定位翻译请求前的凭据开销（#68「性能测量边界」）。
             let readStart = ContinuousClock.now
@@ -341,7 +341,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             result(saved)
         case AppConstants.detectLanguageMethod:
             guard let text = args["text"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "缺少待识别文本", details: nil)); return
+                result(Self.badArguments("缺少待识别文本")); return
             }
             // 设备语言识别耗时写入性能日志，首次调用含模型加载（#68「性能测量边界」）。
             let detectStart = ContinuousClock.now
@@ -352,7 +352,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             result(hypothesis.flatMap { $0.value >= 0.5 ? $0.key.rawValue : nil })
         case AppConstants.openFileMethod, AppConstants.revealFileMethod, AppConstants.copyImageFileMethod:
             guard let path = args["path"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "缺少文件路径。", details: nil)); return
+                result(Self.badArguments("缺少文件路径。")); return
             }
             let url = URL(fileURLWithPath: path)
             switch call.method {
@@ -367,28 +367,25 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
                 guard let png = try? Data(contentsOf: url) else {
                     result(FlutterError(code: AppConstants.copyFailedError, message: "图片文件不可读。", details: nil)); return
                 }
-                let item = NSPasteboardItem()
-                item.setData(png, forType: .png)
-                NSPasteboard.general.clearContents()
-                result(NSPasteboard.general.writeObjects([item]))
+                result(PNGPasteboard.write(png))
             }
         case AppConstants.stitchScreenshotsMethod:
             guard let paths = args["paths"] as? [String], let vertical = args["vertical"] as? Bool else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "stitchScreenshots 需要 paths/vertical", details: nil)); return
+                result(Self.badArguments("stitchScreenshots 需要 paths/vertical")); return
             }
             composeInBackground(result) {
                 FlutterStandardTypedData(bytes: try ScreenshotComposer.stitch(paths: paths, vertical: vertical))
             }
         case AppConstants.splitScreenshotMethod:
             guard let path = args["path"] as? String, let parts = args["parts"] as? Int else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "splitScreenshot 需要 path/parts", details: nil)); return
+                result(Self.badArguments("splitScreenshot 需要 path/parts")); return
             }
             composeInBackground(result) {
                 try ScreenshotComposer.split(path: path, parts: parts).map(FlutterStandardTypedData.init(bytes:))
             }
         case AppConstants.compareScreenshotsMethod:
             guard let first = args["first"] as? String, let second = args["second"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "compareScreenshots 需要 first/second", details: nil)); return
+                result(Self.badArguments("compareScreenshots 需要 first/second")); return
             }
             composeInBackground(result) {
                 let comparison = try ScreenshotComposer.compare(first: first, second: second)
@@ -400,14 +397,14 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             }
         case AppConstants.lookupDefinitionMethod:
             guard let text = args["text"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "lookupDefinition 需要 text", details: nil)); return
+                result(Self.badArguments("lookupDefinition 需要 text")); return
             }
             // 词典服务使用「词典」App 已启用的词典离线查询；查不到返回 nil。
             let range = CFRange(location: 0, length: (text as NSString).length)
             result(DCSCopyTextDefinition(nil, text as CFString, range)?.takeRetainedValue() as String?)
         case AppConstants.saveTextFileMethod:
             guard let text = args["text"] as? String, let suggestedName = args["suggestedName"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "saveTextFile 需要 text/suggestedName", details: nil)); return
+                result(Self.badArguments("saveTextFile 需要 text/suggestedName")); return
             }
             // 用户在保存面板选择位置，取消返回 nil；写入失败返回错误，不静默丢弃导出内容。
             let panel = NSSavePanel()
@@ -425,7 +422,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             }
         case AppConstants.toggleSpeechMethod:
             guard let text = args["text"] as? String, let language = args["language"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "toggleSpeech 需要 text/language", details: nil)); return
+                result(Self.badArguments("toggleSpeech 需要 text/language")); return
             }
             // toggle 在同一段正在朗读时停止，否则改读新文字；返回调用后是否在朗读。
             result(speech.toggle(text: text, language: language))
@@ -439,7 +436,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
                   let target = args["target"] as? String,
                   let strategy = args["strategy"] as? String
             else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "systemTranslate 需要 requestId/texts/source/target/strategy", details: nil)); return
+                result(Self.badArguments("systemTranslate 需要 requestId/texts/source/target/strategy")); return
             }
             Task { @MainActor in
                 // translate 返回按下标排列的译文；错误映射为跨端错误码，由 Dart 生成界面文案。
@@ -453,7 +450,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             }
         case AppConstants.cancelSystemTranslationMethod:
             guard let requestId = args["requestId"] as? String else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "cancelSystemTranslation 需要 requestId", details: nil)); return
+                result(Self.badArguments("cancelSystemTranslation 需要 requestId")); return
             }
             Task { @MainActor in
                 // cancel 停止对应会话；进行中的翻译随后以失败返回，Dart 已丢弃该结果。
@@ -462,7 +459,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             }
         case AppConstants.systemTranslationStatusMethod:
             guard let pairs = args["pairs"] as? [[String]], pairs.allSatisfy({ $0.count == 2 }) else {
-                result(FlutterError(code: AppConstants.badArgsError, message: "systemTranslationStatus 需要 [源语言, 目标语言] 列表", details: nil)); return
+                result(Self.badArguments("systemTranslationStatus 需要 [源语言, 目标语言] 列表")); return
             }
             Task { @MainActor in
                 // status 只查询系统语言包状态，不触发下载；回复留在主线程。
@@ -709,6 +706,11 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             // requestApplication只跨越引擎边界；业务状态由主引擎所属模块管理。
             self.requestApplication(call.method, arguments: call.arguments, result: result)
         }
+    }
+
+    /// message 为给调用方的说明；返回参数错误，通道处理共用。
+    private static func badArguments(_ message: String) -> FlutterError {
+        FlutterError(code: AppConstants.badArgsError, message: message, details: nil)
     }
 
     /// method/arguments为菜单或窗口的业务请求；转到主Dart引擎，由result返回所属模块的结果。

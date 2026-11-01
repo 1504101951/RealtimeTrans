@@ -127,8 +127,7 @@ abstract final class StickerMetrics {
   static const maxDefaultSize = 512.0;
   static const emojiDefaultSize = 96.0;
 
-  /// 贴纸面板格子边长、圆角、每行格数与间距；设置页缩略图边长与间距。
-  static const panelCell = 40.0;
+  /// 贴纸面板格子圆角、每行格数与间距；设置页缩略图边长与间距。
   static const cellRadius = 6.0;
   static const panelColumns = 6;
   static const panelGap = 4.0;

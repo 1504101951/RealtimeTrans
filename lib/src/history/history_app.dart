@@ -5,6 +5,7 @@ import '../common/constants/channel_names.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../common/utils/date_text.dart';
 import '../common/widgets/native_glass.dart';
 
 import 'translation_history.dart';
@@ -285,15 +286,9 @@ class _HistoryAppState extends State<HistoryApp> {
                         );
                       }
                       final item = _items[index];
-                      final date = DateTime.fromMillisecondsSinceEpoch(
-                        item.completedAt,
+                      final timestamp = dateTimeText(
+                        DateTime.fromMillisecondsSinceEpoch(item.completedAt),
                       );
-                      final timestamp =
-                          '${date.year}-'
-                          '${date.month.toString().padLeft(2, '0')}-'
-                          '${date.day.toString().padLeft(2, '0')} '
-                          '${date.hour.toString().padLeft(2, '0')}:'
-                          '${date.minute.toString().padLeft(2, '0')}';
                       return Card(
                         key: ValueKey('history-${item.id}'),
                         margin: const EdgeInsets.only(

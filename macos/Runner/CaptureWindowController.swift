@@ -692,10 +692,7 @@ final class CaptureWindowController: NSObject, NSWindowDelegate {
                     guard let png = scrollPNG() else {
                         throw GIFExporter.ExportError(message: "当前没有可复制的长图。")
                     }
-                    let item = NSPasteboardItem()
-                    item.setData(png, forType: .png)
-                    NSPasteboard.general.clearContents()
-                    guard NSPasteboard.general.writeObjects([item]) else {
+                    guard PNGPasteboard.write(png) else {
                         throw GIFExporter.ExportError(message: "无法复制长图，请重试。")
                     }
                 case AppConstants.saveScreenshotMethod:

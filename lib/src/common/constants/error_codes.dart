@@ -1,10 +1,8 @@
-/// Dart 使用的跨端错误码协议值；与 Swift AppConstants 同名值字面量一致，改名须两端同步。
+/// Dart 按码分支的跨端错误码协议值；是 Swift AppConstants 错误码的子集，字面量一致，改名须两端同步。
 abstract final class ErrorCodes {
   static const invalidSettings = 'invalid_settings';
 
   static const ocrEmpty = 'ocr_empty';
-
-  static const saveFailed = 'save_failed';
 
   static const settingsConflict = 'settings_conflict';
 

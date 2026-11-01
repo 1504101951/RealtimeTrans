@@ -30,6 +30,7 @@ class AppDelegate: FlutterAppDelegate {
         launchedAtLogin = event?.eventID == kAEOpenApplication &&
             event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
     }
+    /// 主引擎的视图控制器没有挂到窗口上，由此字段保持存活。
     private var flutterViewController: FlutterViewController?
     private let overlay = OverlayPanelController()
     private let selectionMonitor = SelectionMonitor()

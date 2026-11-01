@@ -1,6 +1,6 @@
 import 'text_mode.dart';
 
-/// Dart 使用的持久化偏好键协议值；与 Swift AppConstants 同名值字面量一致，改名须两端同步。
+/// Dart 使用的持久化偏好键协议值；Swift AppConstants 也定义的键字面量一致，改名须两端同步，其余键只由 Dart 持久化。
 abstract final class PreferenceKeys {
   /// 每工具独立绘图参数。
   static const screenshotDrawing = 'screenshotDrawing';

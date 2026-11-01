@@ -241,10 +241,8 @@ enum ScreenCaptureService {
         let observations = try await paragraphRequest().perform(on: image)
         let width = Double(image.width)
         let height = Double(image.height)
-        // 识别框为归一化坐标、原点在左下，换成像素并翻到左上原点。
         let pixels = { (region: NormalizedRegion) -> CGRect in
-            let box = region.boundingBox.cgRect
-            return CGRect(x: box.minX * width, y: (1 - box.maxY) * height, width: box.width * width, height: box.height * height)
+            pixelRect(region.boundingBox.cgRect, width: width, height: height)
         }
         return observations.flatMap { observation -> [OCRBlock] in
             let document = observation.document
@@ -347,16 +345,19 @@ enum ScreenCaptureService {
         paragraphs.compactMap { paragraph in
             let text = paragraph.transcript
             guard !text.isEmpty else { return nil }
-            // 识别框为归一化坐标、原点在左下，换成像素并翻到左上原点。
-            let box = paragraph.boundingRegion.boundingBox.cgRect
-            return [
-                "text": text,
-                "x": box.minX * width,
-                "y": (1 - box.maxY) * height,
-                "width": box.width * width,
-                "height": box.height * height,
-            ]
+            return textBlock(text, box: paragraph.boundingRegion.boundingBox.cgRect, width: width, height: height)
         }
+    }
+
+    /// box 为左下原点的归一化识别框，width/height 为图像像素；返回左上原点的像素矩形。
+    private static func pixelRect(_ box: CGRect, width: Double, height: Double) -> CGRect {
+        CGRect(x: box.minX * width, y: (1 - box.maxY) * height, width: box.width * width, height: box.height * height)
+    }
+
+    /// text 为识别文字，box 为归一化识别框，width/height 为图像像素；返回通道传输的文字块 {text, x, y, width, height}。
+    private static func textBlock(_ text: String, box: CGRect, width: Double, height: Double) -> [String: Any] {
+        let rect = pixelRect(box, width: width, height: height)
+        return ["text": text, "x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
     }
 
     /// png 为截图像素；返回带像素框的 OCR 块，坐标原点在左上。
@@ -382,14 +383,7 @@ enum ScreenCaptureService {
             guard let text = observation.topCandidates(1).first?.string, !text.isEmpty else {
                 return nil
             }
-            let box = observation.boundingBox
-            return [
-                "text": text,
-                "x": box.minX * width,
-                "y": (1 - box.maxY) * height,
-                "width": box.width * width,
-                "height": box.height * height,
-            ]
+            return textBlock(text, box: observation.boundingBox, width: width, height: height)
         }
     }
 }

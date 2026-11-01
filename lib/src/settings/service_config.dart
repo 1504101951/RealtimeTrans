@@ -113,7 +113,7 @@ class ServiceConfig {
     }
   }
 
-  /// credentials 为内存中的 Keychain 凭据；缺少协议必需字段时抛用户可读错误。
+  /// credentials 为从钥匙串读取的凭据字典；缺少协议必需字段时抛用户可读错误。
   /// 模型服务的 API Key 可留空（本机服务等不校验密钥），Google 与百度仍须填写（#123）。
   void validateCredentials(Map<String, String> credentials) {
     // 系统翻译不使用凭据，空凭据即为完整配置；模型服务留空时请求不带认证头。

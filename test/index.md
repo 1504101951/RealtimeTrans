@@ -51,3 +51,4 @@ Dart业务逻辑和Flutter界面行为回归测试。
 46. [box_transform_test.dart](box_transform_test.dart)：验证可拖动矩形的命中优先级、旋转后命中、移动限制、自由与比例拉伸、旋转吸附与旋转后拉伸保持对角。
 47. [sticker_test.dart](sticker_test.dart)：按像素验证贴纸位图按范围绘制、旋转后的占位，开启美化时可画在背景留白区、不美化时裁到截图范围，以及贴纸默认大小的计算、往返与校验。
 48. [support/](support/index.md)：测试共用夹具，提供测试图片解码与截图快照 BGRA 像素转换。
+49. [date_text_test.dart](date_text_test.dart)：验证历史与生词本日期文本的补零。

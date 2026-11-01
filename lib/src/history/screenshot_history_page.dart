@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../common/constants/glass_metrics.dart';
 import '../common/constants/method_names.dart';
+import '../common/utils/date_text.dart';
 import '../common/widgets/native_glass.dart';
 import 'screenshot_compose_dialogs.dart';
 import 'screenshot_history.dart';
@@ -300,10 +301,9 @@ class _ScreenshotHistoryPageState extends State<ScreenshotHistoryPage> {
 
   /// theme 为当前主题，record 为一条截图历史；返回缩略图、时间、尺寸与操作按钮组成的卡片。
   Widget _card(ThemeData theme, ScreenshotRecord record) {
-    final date = DateTime.fromMillisecondsSinceEpoch(record.capturedAt);
-    final timestamp =
-        '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')} '
-        '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+    final timestamp = dateTimeText(
+      DateTime.fromMillisecondsSinceEpoch(record.capturedAt),
+    );
     // 缩略图按原图比例缩放到 240pt 宽，过高时限制在 180pt。
     final height = record.width == 0
         ? ScreenshotHistoryPage.thumbnailMaxHeight

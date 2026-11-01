@@ -320,7 +320,7 @@ enum AccessibilitySelection {
             if let range = attribute(element, candidate.range),
                AXUIElementCopyParameterizedAttributeValue(element, candidate.bounds, range, &bounds) == .success,
                let rect = axRect(bounds), !rect.isEmpty {
-                return appKitRect(rect)
+                return CaptureGeometry.appKitRect(fromCGWindowBounds: rect)
             }
         }
         return nil
@@ -335,7 +335,7 @@ enum AccessibilitySelection {
               let sizeValue = attribute(element, kAXSizeAttribute as CFString),
               AXValueGetValue(sizeValue as! AXValue, .cgSize, &size),
               size.width > 0, size.height > 0 else { return nil }
-        return appKitRect(CGRect(origin: position, size: size))
+        return CaptureGeometry.appKitRect(fromCGWindowBounds: CGRect(origin: position, size: size))
     }
 
     /// value 为 AX 返回的矩形值；返回其中的 CGRect，类型不符时返回 nil。
@@ -343,12 +343,6 @@ enum AccessibilitySelection {
         guard let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
         var rect = CGRect.zero
         return AXValueGetValue(value as! AXValue, .cgRect, &rect) ? rect : nil
-    }
-
-    /// rect 为左上原点的全局屏幕矩形；返回以主屏左下为原点的 AppKit 全局矩形。
-    private static func appKitRect(_ rect: CGRect) -> NSRect {
-        let height = NSScreen.screens[0].frame.maxY
-        return NSRect(x: rect.minX, y: height - rect.maxY, width: rect.width, height: rect.height)
     }
 
     /// sourcePID 为来源进程；确定输入翻译的粘贴目标：焦点已是可写入的文本输入控件时直接返回 true；

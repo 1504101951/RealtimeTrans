@@ -1,5 +1,4 @@
 import 'package:translate_app/src/common/constants/method_names.dart';
-import 'package:translate_app/src/common/constants/error_codes.dart';
 
 import 'dart:async';
 import 'dart:io';
@@ -226,7 +225,7 @@ void main() {
         case MethodNames.saveScreenshot:
           if (saveError != null) {
             throw PlatformException(
-              code: ErrorCodes.saveFailed,
+              code: 'save_failed',
               message: saveError,
             );
           }

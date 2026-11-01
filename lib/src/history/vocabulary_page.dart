@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../common/constants/glass_metrics.dart';
 import '../common/constants/method_names.dart';
+import '../common/utils/date_text.dart';
 import '../common/widgets/native_glass.dart';
 import 'vocabulary.dart';
 
@@ -74,9 +75,7 @@ class _VocabularyPageState extends State<VocabularyPage> {
       final csv = await widget.channel.invokeMethod<String>(
         MethodNames.vocabularyCsv,
       );
-      final now = DateTime.now();
-      final date =
-          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+      final date = dateText(DateTime.now());
       final path = await widget.channel.invokeMethod<String>(
         MethodNames.saveTextFile,
         {'text': csv!, 'suggestedName': 'TranslateApp 生词本 $date.csv'},
@@ -133,9 +132,7 @@ class _VocabularyPageState extends State<VocabularyPage> {
                                   ),
                                 ),
                                 Text(
-                                  '${date.year}-'
-                                  '${date.month.toString().padLeft(2, '0')}-'
-                                  '${date.day.toString().padLeft(2, '0')}',
+                                  dateText(date),
                                   style: theme.textTheme.bodySmall,
                                 ),
                                 const SizedBox(width: 8),

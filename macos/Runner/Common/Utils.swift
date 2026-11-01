@@ -160,6 +160,17 @@ enum DisplayCapture {
     }
 }
 
+/// PNG 写入系统剪贴板；截图、长截图与历史图片的复制共用。
+enum PNGPasteboard {
+    /// png 为图片数据，pasteboard 为目标剪贴板；清空后写入，返回是否成功。
+    static func write(_ png: Data, to pasteboard: NSPasteboard = .general) -> Bool {
+        let item = NSPasteboardItem()
+        item.setData(png, forType: .png)
+        pasteboard.clearContents()
+        return pasteboard.writeObjects([item])
+    }
+}
+
 /// 窗口列表与显示器坐标换算；截图默认选区用。
 enum CaptureGeometry {
     /// 无参数；返回坐标原点在 (0,0) 的主显示器，找不到时退回 NSScreen.main，坐标换算以其高度为基准。
