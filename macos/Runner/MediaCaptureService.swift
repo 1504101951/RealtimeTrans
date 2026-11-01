@@ -787,7 +787,7 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
                                 if target == nil, wheel == nil, !barRejected, trusted { target = AutoScrollTarget(point: center) }
                                 // 没有可用滚动条时改走滚轮途径，步进按像素重新校准。
                                 if target == nil, wheel == nil, trusted {
-                                    wheel = AutoScrollWheel(frame: selection)
+                                    wheel = AutoScrollWheel(frame: selection, source: AutoScrollTarget.sourceWindow(at: center))
                                     plan = .wheel(height: config.height)
                                 }
                                 if let target {
@@ -855,10 +855,12 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
                                 }
                             case .unsupported:
                                 driving = false
-                                // 滚动条不起作用时下一帧换滚轮途径；滚轮也不动才改为手动。
+                                // 依次换途径：滚动条 → 投给来源进程的滚轮 → 指针位置的滚轮；都不动才改为手动。
                                 if target != nil {
                                     target = nil
                                     barRejected = true
+                                } else if wheel?.fallBackToPointer() == true {
+                                    plan = .wheel(height: config.height)
                                 } else {
                                     await self.endAutoScroll(token: token, hint: MediaCaptureService.unsupportedScrollHint)
                                 }

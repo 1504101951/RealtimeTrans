@@ -29,8 +29,12 @@ struct AutoScrollPlan {
     /// 滚轮途径的首步像素占单步目标的比例；较小的首步避免跨出可配准范围。
     static let initialWheelRatio = 0.25
 
-    /// 单步目标位移（像素）：选区高度的 50%。
-    let target: Int
+    /// 单步目标位移（像素）：滚动条途径为选区高度的 50%，滚轮途径为 25%。
+    private(set) var target: Int
+    /// 校准时单步最多放大的倍数；滚轮途径在中途采样时容易少计位移，放大更保守。
+    private var growth = 4.0
+    /// 接缝失败时目标位移是否一并减半；滚轮途径用它避免校准后再次跨出可配准范围。
+    private var shrinksTarget = false
     /// 下一步的滚动条增量。
     private(set) var step: Double
     /// 最近一次滚动或退回的时刻；到底或不支持后为 nil，直到再次 start。
@@ -49,10 +53,13 @@ struct AutoScrollPlan {
         self.step = step
     }
 
-    /// height为选区像素高度；返回滚轮途径的步进计划，首步为单步目标的 25%。
+    /// height为选区像素高度；返回滚轮途径的步进计划：单步目标为选区高度的 25%，首步为目标的 25%。
     static func wheel(height: Int) -> AutoScrollPlan {
         var plan = AutoScrollPlan(height: height)
+        plan.target = max(1, height / 4)
         plan.step = max(1, Double(plan.target) * initialWheelRatio)
+        plan.growth = 1.5
+        plan.shrinksTarget = true
         return plan
     }
 
@@ -81,8 +88,8 @@ struct AutoScrollPlan {
         }
         if moved > 0, still >= Self.settledFrames || now - stepped >= Self.maximumWait {
             everMoved = true
-            // 按本步「增量/位移」比例换算到目标位移；最多放大到 4 倍，避免一次跨出可配准范围。
-            step = min(step * 4, step * Double(target) / Double(moved))
+            // 按本步「增量/位移」比例换算到目标位移；放大有上限，避免一次跨出可配准范围。
+            step = min(step * growth, step * Double(target) / Double(moved))
             begin(now)
             return .scroll(by: step)
         }
@@ -94,6 +101,7 @@ struct AutoScrollPlan {
     /// now为接缝失败时刻；步长减半并返回退回，画面停稳后再重试。
     mutating func mismatch(now: ContinuousClock.Instant) -> Action {
         step /= 2
+        if shrinksTarget { target = max(1, target / 2) }
         rewinding = true
         begin(now)
         return .rewind
@@ -107,8 +115,8 @@ struct AutoScrollPlan {
     }
 }
 
-/// 自动滚动的滚轮途径（#112）：Chromium 等不暴露可写滚动条的来源，在指针当前位置发送合成像素滚轮。
-/// 事件位置始终取当前指针，发送不移动指针，用户可随时移动鼠标；只有开始时把选区外的指针移入选区一次。
+/// 自动滚动的滚轮途径（#112）：Chromium 等不暴露可写滚动条的来源使用合成像素滚轮。
+/// 优先直接投给来源进程，与鼠标互不影响；来源不响应时改为在指针位置发送，此时滚轮只作用于指针下的窗口。
 /// 不带滚动阶段，来源一步滚到位，便于采样停稳；调用方须已确认辅助功能权限。
 struct AutoScrollWheel {
     /// 写入 eventSourceUserData 的标记，接管监听据此区分用户滚动与自动滚动。
@@ -116,16 +124,30 @@ struct AutoScrollWheel {
 
     /// 采集选区，CG 全局坐标（左上原点）。
     let frame: CGRect
+    /// 来源进程与窗口；nil 表示在指针位置发送。
+    private(set) var source: (pid: pid_t, window: CGWindowID)?
     /// 最近一步向下滚动的像素，供接缝失败时退回。
     private var last: Int32 = 0
 
-    /// frame为采集选区，CG 全局坐标。
-    init(frame: CGRect) { self.frame = frame }
+    /// frame为采集选区，CG 全局坐标；source 为选区中心处的来源窗口，未找到时在指针位置发送。
+    init(frame: CGRect, source: (pid: pid_t, window: CGWindowID)?) {
+        self.frame = frame
+        self.source = source
+    }
 
-    /// 无参数；返回指针是否在选区内，滚轮只对指针下的窗口生效。
-    var pointerInside: Bool { CGEvent(source: nil).map { frame.contains($0.location) } ?? false }
+    /// 无参数；来源进程不响应投递时改为在指针位置发送，返回是否发生了切换。
+    mutating func fallBackToPointer() -> Bool {
+        guard source != nil else { return false }
+        source = nil
+        return true
+    }
 
-    /// 无参数；开始或恢复一轮滚动：指针在选区外时移到选区中心，无返回值。
+    /// 无参数；返回当前能否发送：投给进程时始终可以，指针位置发送要求指针在选区内。
+    var pointerInside: Bool {
+        source != nil || CGEvent(source: nil).map { frame.contains($0.location) } ?? false
+    }
+
+    /// 无参数；开始或恢复一轮滚动：指针位置发送且指针在选区外时移到选区中心，无返回值。
     func prepare() {
         guard !pointerInside else { return }
         CGWarpMouseCursorPosition(CGPoint(x: frame.midX, y: frame.midY))
@@ -147,13 +169,21 @@ struct AutoScrollWheel {
     /// step 为校准后的增量；返回滚轮像素：取整、至少 1px、不超过 Int32 范围。
     static func pixels(_ step: Double) -> Int32 { Int32(min(Double(Int32.max), max(1, step.rounded()))) }
 
-    /// delta 为滚轮像素，负数向下；在指针当前位置发送标记事件，返回事件是否已创建并发送。
+    /// delta 为滚轮像素，负数向下；发送标记事件：投给来源进程，或在指针当前位置发送；返回事件是否已创建并发送。
     private func post(_ delta: Int32) -> Bool {
         guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0),
               let pointer = CGEvent(source: nil)?.location else { return false }
-        event.location = pointer
         event.setIntegerValueField(.eventSourceUserData, value: Self.marker)
-        event.post(tap: .cghidEventTap)
+        guard let source else {
+            event.location = pointer
+            event.post(tap: .cghidEventTap)
+            return true
+        }
+        // 窗口字段告诉来源事件属于哪个窗口，来源在后台时也能路由到选区下的内容。
+        event.location = CGPoint(x: frame.midX, y: frame.midY)
+        event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(source.window))
+        event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(source.window))
+        event.postToPid(source.pid)
         return true
     }
 }
@@ -163,8 +193,8 @@ struct AutoScrollWheel {
 final class AutoScrollTarget {
     private let bar: AXUIElement
 
-    /// point为 CG 全局坐标（左上原点）；返回该点最上层、非本应用普通窗口内可设置值的纵向滚动条，找不到时返回 nil。
-    init?(point: CGPoint) {
+    /// point为 CG 全局坐标（左上原点）；返回该点最上层、非本应用普通窗口的进程与窗口号，找不到时返回 nil。
+    static func sourceWindow(at point: CGPoint) -> (pid: pid_t, window: CGWindowID)? {
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         let own = ProcessInfo.processInfo.processIdentifier
         // 窗口列表按前后顺序排列；第 0 层是普通应用窗口，采集遮罩等本应用窗口不参与。
@@ -174,7 +204,14 @@ final class AutoScrollTarget {
                   let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
             return rect.contains(point)
         }
-        guard let pid = owner?[kCGWindowOwnerPID as String] as? pid_t else { return nil }
+        guard let pid = owner?[kCGWindowOwnerPID as String] as? pid_t,
+              let window = owner?[kCGWindowNumber as String] as? CGWindowID else { return nil }
+        return (pid, window)
+    }
+
+    /// point为 CG 全局坐标（左上原点）；返回该点来源窗口内可设置值的纵向滚动条，找不到时返回 nil。
+    init?(point: CGPoint) {
+        guard let pid = Self.sourceWindow(at: point)?.pid else { return nil }
         var hit: AXUIElement?
         guard AXUIElementCopyElementAtPosition(AXUIElementCreateApplication(pid), Float(point.x), Float(point.y), &hit) == .success,
               var current = hit else { return nil }

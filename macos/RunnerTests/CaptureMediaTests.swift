@@ -1107,16 +1107,23 @@ final class CaptureMediaTests: XCTestCase {
         }
     }
 
-    /// 无参数；滚轮途径按像素步进：首步为单步目标的 25%，校准后到目标，像素取整且至少 1px（#112）。
-    /// 边界：选区高 1000px 目标 500px，首步 125px；移动 250px（2 倍屏）后按 125×500/250=250 继续；0.2 取整为下限 1。
+    /// 无参数；滚轮途径按像素步进：单步目标为选区高度的 25%，放大最多 1.5 倍，接缝失败后目标减半，像素取整且至少 1px（#112）。
+    /// 边界：选区高 1000px 目标 250px，首步 62.5px；移动 250px 后 62.5×250/250=62.5 不放大；
+    /// 移动 25px 后应放大到 625，被 1.5 倍截到 93.75；接缝失败后步长减半、目标 125；0.2 取整为下限 1。
     func testAutoScrollWheelPlanStepsInPixels() {
         let start = ContinuousClock.now
         let at = { (ms: Int) in start.advanced(by: .milliseconds(ms)) }
         var plan = AutoScrollPlan.wheel(height: 1000)
-        XCTAssertEqual(plan.start(now: at(0)), .scroll(by: 125))
+        XCTAssertEqual(plan.start(now: at(0)), .scroll(by: 62.5))
         XCTAssertEqual(plan.frame(shift: 250, now: at(100)), .wait)
         XCTAssertEqual(plan.frame(shift: 0, now: at(200)), .wait)
-        XCTAssertEqual(plan.frame(shift: 0, now: at(300)), .scroll(by: 250))
+        XCTAssertEqual(plan.frame(shift: 0, now: at(300)), .scroll(by: 62.5))
+        XCTAssertEqual(plan.frame(shift: 25, now: at(400)), .wait)
+        XCTAssertEqual(plan.frame(shift: 0, now: at(500)), .wait)
+        XCTAssertEqual(plan.frame(shift: 0, now: at(600)), .scroll(by: 93.75))
+        XCTAssertEqual(plan.mismatch(now: at(700)), .rewind)
+        XCTAssertEqual(plan.target, 125)
+        XCTAssertEqual(plan.step, 46.875)
         XCTAssertEqual(AutoScrollWheel.pixels(0.2), 1)
         XCTAssertEqual(AutoScrollWheel.pixels(249.6), 250)
     }
