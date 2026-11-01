@@ -696,11 +696,14 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
                 var unmatched: String?
                 var lastHint: ContinuousClock.Instant?
                 // 自动滚动：plan 计算步进，target 在首次开始时按选区中心解析，driving 为本轮是否正由 App 滚动，
-                // previousValue 为最近一步之前的滚动条值，供接缝失败时退回。
+                // previousValue 为最近一步之前的滚动条值，供接缝失败时退回；
+                // wheel 为滚轮途径，barRejected 表示滚动条途径已失败，不再尝试。
                 var plan = AutoScrollPlan(height: config.height)
                 var target: AutoScrollTarget?
                 var driving = false
                 var previousValue: Double?
+                var wheel: AutoScrollWheel?
+                var barRejected = false
                 // 缩略图只在确认帧数或回退目标状态变化时重绘。
                 var previewFrames = 0
                 var previewMarked = false
@@ -777,30 +780,52 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
                             if state.2, !driving, stitcher.acceptedFrames > 0 {
                                 let trusted = AXIsProcessTrusted()
                                 // AutoScrollTarget 在选区中心命中来源窗口并找到可设置的纵向滚动条。
-                                if target == nil, trusted { target = AutoScrollTarget(point: center) }
+                                if target == nil, wheel == nil, !barRejected, trusted { target = AutoScrollTarget(point: center) }
+                                // 没有可用滚动条时改走滚轮途径，步进按像素重新校准。
+                                if target == nil, wheel == nil, trusted {
+                                    wheel = AutoScrollWheel(point: center)
+                                    plan = .wheel(height: config.height)
+                                }
                                 if let target {
                                     driving = true
                                     // 已在底部时直接按到底处理，不误报不支持。
                                     action = (target.value ?? 0) >= 0.999 ? .bottom : plan.start(now: clock.now)
+                                } else if wheel != nil {
+                                    driving = true
+                                    action = plan.start(now: clock.now)
                                 } else {
-                                    await self.endAutoScroll(token: token, hint: trusted
-                                        ? MediaCaptureService.unsupportedScrollHint : "自动滚动需要辅助功能权限，已改为手动滚动")
+                                    await self.endAutoScroll(token: token, hint: "自动滚动需要辅助功能权限，已改为手动滚动")
                                 }
                             }
                             switch action {
                             case .wait:
                                 break
                             case .scroll(let step):
-                                // 记住本步之前的位置供退回，再写入新的滚动条值；读取或写入失败按不支持处理，
+                                if wheel != nil {
+                                    if wheel?.scroll(by: step) != true {
+                                        driving = false
+                                        await self.endAutoScroll(token: token, hint: MediaCaptureService.unsupportedScrollHint)
+                                    }
+                                    break
+                                }
+                                // 记住本步之前的位置供退回，再写入新的滚动条值；读取或写入失败换滚轮途径，
                                 // 避免画面不动被误判为到底（#112）。
                                 previousValue = target?.value
                                 guard let target, let previousValue, target.set(previousValue + step) else {
                                     driving = false
-                                    await self.endAutoScroll(token: token, hint: MediaCaptureService.unsupportedScrollHint)
+                                    target = nil
+                                    barRejected = true
                                     break
                                 }
                             case .rewind:
-                                // 退回失败同样按不支持处理（#112）。
+                                if let wheel {
+                                    if !wheel.rewind() {
+                                        driving = false
+                                        await self.endAutoScroll(token: token, hint: MediaCaptureService.unsupportedScrollHint)
+                                    }
+                                    break
+                                }
+                                // 退回失败按不支持处理（#112）。
                                 guard let target, let previousValue, target.set(previousValue) else {
                                     driving = false
                                     await self.endAutoScroll(token: token, hint: MediaCaptureService.unsupportedScrollHint)
@@ -814,7 +839,13 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
                                 }
                             case .unsupported:
                                 driving = false
-                                await self.endAutoScroll(token: token, hint: MediaCaptureService.unsupportedScrollHint)
+                                // 滚动条不起作用时下一帧换滚轮途径；滚轮也不动才改为手动。
+                                if target != nil {
+                                    target = nil
+                                    barRejected = true
+                                } else {
+                                    await self.endAutoScroll(token: token, hint: MediaCaptureService.unsupportedScrollHint)
+                                }
                             }
                         }
                         if clock.now < nextCapture { try await clock.sleep(until: nextCapture) }
@@ -865,7 +896,7 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
         update(target ?? phase, ["hint": text, "hintIsError": isError, "hintSerial": scrollHintSerial])
     }
 
-    /// 来源不支持自动滚动（没有可设置的滚动条、读写滚动条失败或首步不移动）时的提示（#112）。
+    /// 滚动条与滚轮途径都无法让来源滚动时的提示（#112）。
     private static let unsupportedScrollHint = "该区域无法自动滚动，已改为手动滚动"
 
     /// token为会话身份，hint为改为手动的原因；本次会话改为手动滚动并显示错误提示，移除接管监听，无返回值（#112）。
@@ -878,9 +909,10 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
     }
 
     /// 无参数；自动滚动期间安装只读全局滚轮监听：用户在采集选区内滚动时本次改为手动并提示，选区外滚动不影响（#112）。
-    /// 自动滚动只写滚动条值、不产生滚轮事件，监听到的都是用户操作；监听不消费事件。
+    /// 带 AutoScrollWheel 标记的事件是自动滚动自身发出的，不算接管；监听不消费事件。
     private func watchScrollTakeover() {
-        scrollWheelMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] _ in
+        scrollWheelMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != AutoScrollWheel.marker else { return }
             let location = NSEvent.mouseLocation
             Task { @MainActor in
                 guard let self, self.autoScrollActive, self.phase == .scrolling,

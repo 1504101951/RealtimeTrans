@@ -1107,6 +1107,20 @@ final class CaptureMediaTests: XCTestCase {
         }
     }
 
+    /// 无参数；滚轮途径按像素步进：首步为单步目标的 25%，校准后到目标，像素取整且至少 1px（#112）。
+    /// 边界：选区高 1000px 目标 500px，首步 125px；移动 250px（2 倍屏）后按 125×500/250=250 继续；0.2 取整为下限 1。
+    func testAutoScrollWheelPlanStepsInPixels() {
+        let start = ContinuousClock.now
+        let at = { (ms: Int) in start.advanced(by: .milliseconds(ms)) }
+        var plan = AutoScrollPlan.wheel(height: 1000)
+        XCTAssertEqual(plan.start(now: at(0)), .scroll(by: 125))
+        XCTAssertEqual(plan.frame(shift: 250, now: at(100)), .wait)
+        XCTAssertEqual(plan.frame(shift: 0, now: at(200)), .wait)
+        XCTAssertEqual(plan.frame(shift: 0, now: at(300)), .scroll(by: 250))
+        XCTAssertEqual(AutoScrollWheel.pixels(0.2), 1)
+        XCTAssertEqual(AutoScrollWheel.pixels(249.6), 250)
+    }
+
     /// 无参数；自动滚动步进：画面移动后连续 2 帧静止才滚下一步，按实测位移校准增量且最多放大 4 倍（#112）。
     /// 边界：选区高 1000px 目标 500px；首步 0.01 移动 100px，只静止 1 帧时仍等待，第 2 帧静止才按 0.01×500/100=0.05
     /// 截到 4 倍即 0.04；第二步移动 400px 后按 0.04×500/400=0.05 滚动（未超 4 倍上限 0.16）。

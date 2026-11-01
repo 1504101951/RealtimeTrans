@@ -8,13 +8,13 @@ struct AutoScrollPlan {
     enum Action: Equatable {
         /// 继续采样，不滚动。
         case wait
-        /// 滚动条值增加该增量（0–1 范围内的比例）。
+        /// 按该增量继续滚动：滚动条途径为 0–1 范围内的比例，滚轮途径为像素。
         case scroll(by: Double)
         /// 本步跨出可配准范围：退回本步之前的位置。
         case rewind
         /// 曾经滚动过且本步无移动：已到底部，自动暂停。
         case bottom
-        /// 首步无移动：来源不响应滚动条，改为手动。
+        /// 首步无移动：来源不响应当前滚动途径。
         case unsupported
     }
 
@@ -24,13 +24,15 @@ struct AutoScrollPlan {
     static let maximumWait: Duration = .milliseconds(1000)
     /// 滚动后无移动的到底判定时长。
     static let bottomWait: Duration = .milliseconds(1500)
-    /// 首步滚动条增量；之后按实测位移校准。
+    /// 滚动条途径的首步增量；之后按实测位移校准。
     static let initialStep = 0.01
+    /// 滚轮途径的首步像素占单步目标的比例；较小的首步避免跨出可配准范围。
+    static let initialWheelRatio = 0.25
 
     /// 单步目标位移（像素）：选区高度的 50%。
     let target: Int
     /// 下一步的滚动条增量。
-    private(set) var step = initialStep
+    private(set) var step: Double
     /// 最近一次滚动或退回的时刻；到底或不支持后为 nil，直到再次 start。
     private var stepped: ContinuousClock.Instant?
     /// 本步以来累计追加的正文像素与连续静止帧数。
@@ -41,8 +43,18 @@ struct AutoScrollPlan {
     /// 本次会话是否有任何一步产生过移动；区分到底与不支持。
     private var everMoved = false
 
-    /// height为选区像素高度；单步目标取其一半。
-    init(height: Int) { target = max(1, height / 2) }
+    /// height为选区像素高度，单步目标取其一半；step 为首步增量，缺省为滚动条途径的增量。
+    init(height: Int, step: Double = initialStep) {
+        target = max(1, height / 2)
+        self.step = step
+    }
+
+    /// height为选区像素高度；返回滚轮途径的步进计划，首步为单步目标的 25%。
+    static func wheel(height: Int) -> AutoScrollPlan {
+        var plan = AutoScrollPlan(height: height)
+        plan.step = max(1, Double(plan.target) * initialWheelRatio)
+        return plan
+    }
 
     /// now为开始时刻；开始（或暂停后恢复）一轮自动滚动，返回第一步滚动。
     mutating func start(now: ContinuousClock.Instant) -> Action {
@@ -95,8 +107,51 @@ struct AutoScrollPlan {
     }
 }
 
+/// 自动滚动的滚轮途径（#112）：Chromium 等不暴露可写滚动条的来源，向选区中心发送合成像素滚轮。
+/// 不带滚动阶段，来源一步滚到位，便于采样停稳；调用方须已确认辅助功能权限。
+/// 已知限制：发送后立刻放回指针，放回前指针可能短暂出现在选区中心；用户反馈指针跳动时改为小步或进程投递。
+struct AutoScrollWheel {
+    /// 写入 eventSourceUserData 的标记，接管监听据此区分用户滚动与自动滚动。
+    static let marker: Int64 = 0x5C40_112
+
+    /// 事件位置，CG 全局坐标（左上原点）。
+    let point: CGPoint
+    /// 最近一步向下滚动的像素，供接缝失败时退回。
+    private var last: Int32 = 0
+
+    /// point为选区中心，CG 全局坐标。
+    init(point: CGPoint) { self.point = point }
+
+    /// step 为向下滚动的像素，取整后至少 1px；返回事件是否已发送。
+    mutating func scroll(by step: Double) -> Bool {
+        let pixels = Self.pixels(step)
+        guard post(-pixels) else { return false }
+        last = pixels
+        return true
+    }
+
+    /// 无参数；向上滚回最近一步，返回事件是否已发送。
+    func rewind() -> Bool { post(last) }
+
+    /// step 为校准后的增量；返回滚轮像素：取整、至少 1px、不超过 Int32 范围。
+    static func pixels(_ step: Double) -> Int32 { Int32(min(Double(Int32.max), max(1, step.rounded()))) }
+
+    /// delta 为滚轮像素，负数向下；发送标记事件后把指针放回原位，返回事件是否已创建并发送。
+    private func post(_ delta: Int32) -> Bool {
+        guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0),
+              let pointer = CGEvent(source: nil)?.location else { return false }
+        event.location = point
+        event.setIntegerValueField(.eventSourceUserData, value: Self.marker)
+        event.post(tap: .cghidEventTap)
+        // 放回指针后恢复与鼠标的关联，否则系统会短暂忽略用户移动。
+        CGWarpMouseCursorPosition(pointer)
+        CGAssociateMouseAndMouseCursorPosition(1)
+        return true
+    }
+}
+
 /// 自动滚动目标（#112）：选区中心处来源窗口的纵向滚动条。只经辅助功能接口读写滚动条值，
-/// 不发送滚轮事件、不移动指针；调用方须已确认辅助功能权限。
+/// 不移动指针；调用方须已确认辅助功能权限。
 final class AutoScrollTarget {
     private let bar: AXUIElement
 
