@@ -64,7 +64,7 @@ class AppDelegate: FlutterAppDelegate {
             forName: AppConstants.historyChangedNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.historyWindow.refresh() }
         bridge.onReady = { [weak self, weak bridge] in
-            // 主界面就绪后预热截图引擎，首次截图不再等待引擎冷启动（#68 批次 A）。
+            // 主界面就绪后预热截图引擎，首次截图直接复用已启动的引擎（#68 批次 A）。
             bridge?.screenshot.prewarm()
             let access = AccessibilitySelection.isTrusted(prompt: false)
             let screen = ScreenCaptureService.isAuthorized()

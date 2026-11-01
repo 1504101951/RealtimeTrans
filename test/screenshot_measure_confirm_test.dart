@@ -62,7 +62,7 @@ void main() {
 
   testWidgets('确认截图按设置执行：复制并保存只发一次带复制标记的保存并关闭，改为复制图片后只复制并关闭', (tester) async {
     // 边界：快照中的 screenshotConfirmAction 为 copyAndSave 时，确认只发出保存（copy: true，图片只传一次）与关闭，
-    // 不再单独发出复制（#68）；工具栏变更通知把动作改为 copy 后，再次确认只新增复制与关闭，保存次数仍为 1。
+    // 没有单独的复制（#68）；工具栏变更通知把动作改为 copy 后，再次确认只新增复制与关闭，保存次数仍为 1。
     final editor = await _pumpEditor(
       tester,
       'test/confirm-action',

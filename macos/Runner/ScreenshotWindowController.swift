@@ -304,7 +304,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         if !displaysFrozenScreen { value["imageScale"] = selectedScale }
         if let image, let captureId {
             value["id"] = captureId
-            // 截图引擎用 decodeImageFromPixels 按 bgra8888 与行字节数建图，不再编解码 PNG。
+            // 截图引擎用 decodeImageFromPixels 按 bgra8888 与行字节数建图，全程不编解码 PNG。
             value["pixels"] = FlutterStandardTypedData(bytes: image.dataProvider!.data! as Data)
             value["rowBytes"] = image.bytesPerRow
         }
