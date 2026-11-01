@@ -107,20 +107,31 @@ struct AutoScrollPlan {
     }
 }
 
-/// 自动滚动的滚轮途径（#112）：Chromium 等不暴露可写滚动条的来源，向选区中心发送合成像素滚轮。
+/// 自动滚动的滚轮途径（#112）：Chromium 等不暴露可写滚动条的来源，在指针当前位置发送合成像素滚轮。
+/// 事件位置始终取当前指针，发送不移动指针，用户可随时移动鼠标；只有开始时把选区外的指针移入选区一次。
 /// 不带滚动阶段，来源一步滚到位，便于采样停稳；调用方须已确认辅助功能权限。
-/// 已知限制：发送后立刻放回指针，放回前指针可能短暂出现在选区中心；用户反馈指针跳动时改为小步或进程投递。
 struct AutoScrollWheel {
     /// 写入 eventSourceUserData 的标记，接管监听据此区分用户滚动与自动滚动。
     static let marker: Int64 = 0x5C40_112
 
-    /// 事件位置，CG 全局坐标（左上原点）。
-    let point: CGPoint
+    /// 采集选区，CG 全局坐标（左上原点）。
+    let frame: CGRect
     /// 最近一步向下滚动的像素，供接缝失败时退回。
     private var last: Int32 = 0
 
-    /// point为选区中心，CG 全局坐标。
-    init(point: CGPoint) { self.point = point }
+    /// frame为采集选区，CG 全局坐标。
+    init(frame: CGRect) { self.frame = frame }
+
+    /// 无参数；返回指针是否在选区内，滚轮只对指针下的窗口生效。
+    var pointerInside: Bool { CGEvent(source: nil).map { frame.contains($0.location) } ?? false }
+
+    /// 无参数；开始或恢复一轮滚动：指针在选区外时移到选区中心，无返回值。
+    func prepare() {
+        guard !pointerInside else { return }
+        CGWarpMouseCursorPosition(CGPoint(x: frame.midX, y: frame.midY))
+        // 恢复指针与鼠标的关联，否则系统会短暂忽略用户移动。
+        CGAssociateMouseAndMouseCursorPosition(1)
+    }
 
     /// step 为向下滚动的像素，取整后至少 1px；返回事件是否已发送。
     mutating func scroll(by step: Double) -> Bool {
@@ -136,16 +147,13 @@ struct AutoScrollWheel {
     /// step 为校准后的增量；返回滚轮像素：取整、至少 1px、不超过 Int32 范围。
     static func pixels(_ step: Double) -> Int32 { Int32(min(Double(Int32.max), max(1, step.rounded()))) }
 
-    /// delta 为滚轮像素，负数向下；发送标记事件后把指针放回原位，返回事件是否已创建并发送。
+    /// delta 为滚轮像素，负数向下；在指针当前位置发送标记事件，返回事件是否已创建并发送。
     private func post(_ delta: Int32) -> Bool {
         guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0),
               let pointer = CGEvent(source: nil)?.location else { return false }
-        event.location = point
+        event.location = pointer
         event.setIntegerValueField(.eventSourceUserData, value: Self.marker)
         event.post(tap: .cghidEventTap)
-        // 放回指针后恢复与鼠标的关联，否则系统会短暂忽略用户移动。
-        CGWarpMouseCursorPosition(pointer)
-        CGAssociateMouseAndMouseCursorPosition(1)
         return true
     }
 }

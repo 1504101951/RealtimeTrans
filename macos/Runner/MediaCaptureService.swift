@@ -688,6 +688,10 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
             if automatic { watchScrollTakeover() }
             // configuration 已按实际采集范围设置 captureFrame。
             let center = CaptureGeometry.cgPoint(fromAppKitPoint: NSPoint(x: captureFrame!.midX, y: captureFrame!.midY))
+            // 滚轮途径用 CG 坐标的选区判断指针位置；AppKit 的上边对应 CG 的原点。
+            let selection = CGRect(
+                origin: CaptureGeometry.cgPoint(fromAppKitPoint: NSPoint(x: captureFrame!.minX, y: captureFrame!.maxY)),
+                size: captureFrame!.size)
             update(.scrolling, ["height": config.height, "width": config.width, "frames": 0])
             scrollTask = Task.detached { [weak self] in
                 guard let self else { return }
@@ -783,14 +787,15 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
                                 if target == nil, wheel == nil, !barRejected, trusted { target = AutoScrollTarget(point: center) }
                                 // 没有可用滚动条时改走滚轮途径，步进按像素重新校准。
                                 if target == nil, wheel == nil, trusted {
-                                    wheel = AutoScrollWheel(point: center)
+                                    wheel = AutoScrollWheel(frame: selection)
                                     plan = .wheel(height: config.height)
                                 }
                                 if let target {
                                     driving = true
                                     // 已在底部时直接按到底处理，不误报不支持。
                                     action = (target.value ?? 0) >= 0.999 ? .bottom : plan.start(now: clock.now)
-                                } else if wheel != nil {
+                                } else if let wheel {
+                                    wheel.prepare()
                                     driving = true
                                     action = plan.start(now: clock.now)
                                 } else {
@@ -802,6 +807,12 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
                                 break
                             case .scroll(let step):
                                 if wheel != nil {
+                                    // 滚轮只作用于指针下的窗口：指针移出选区时暂停，不追回指针。
+                                    guard wheel?.pointerInside == true else {
+                                        driving = false
+                                        await self.pauseForPointer(token: token)
+                                        break
+                                    }
                                     if wheel?.scroll(by: step) != true {
                                         driving = false
                                         await self.endAutoScroll(token: token, hint: MediaCaptureService.unsupportedScrollHint)
@@ -819,6 +830,11 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
                                 }
                             case .rewind:
                                 if let wheel {
+                                    guard wheel.pointerInside else {
+                                        driving = false
+                                        await self.pauseForPointer(token: token)
+                                        break
+                                    }
                                     if !wheel.rewind() {
                                         driving = false
                                         await self.endAutoScroll(token: token, hint: MediaCaptureService.unsupportedScrollHint)
@@ -898,6 +914,12 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
 
     /// 滚动条与滚轮途径都无法让来源滚动时的提示（#112）。
     private static let unsupportedScrollHint = "该区域无法自动滚动，已改为手动滚动"
+
+    /// token为会话身份；滚轮途径下指针移出选区时暂停并提示，「继续」把指针移回选区后恢复，无返回值（#112）。
+    private func pauseForPointer(token: String) {
+        guard id == token, phase == .scrolling else { return }
+        showScrollHint("指针移出选区，已暂停", isError: false, phase: .paused)
+    }
 
     /// token为会话身份，hint为改为手动的原因；本次会话改为手动滚动并显示错误提示，移除接管监听，无返回值（#112）。
     private func endAutoScroll(token: String, hint: String) {
