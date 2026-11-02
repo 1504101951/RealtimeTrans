@@ -1,6 +1,6 @@
 # macOS 安装
 
-运行 `./scripts/package-and-install-macos.sh` 完成打包并安装；失败立即退出。打包前保存内容并退出所有 TranslateApp；仍有 `translate_app` 进程时脚本停止。
+运行 `./scripts/package-and-install-macos.sh` 完成打包并安装；失败立即退出。脚本会强制结束正在运行的 TranslateApp，不等待应用内确认。未保存采集会被丢掉，采集资源的退出清理不会执行。5 秒后进程仍在则脚本停止。
 
 ## 可直接启动的 App
 

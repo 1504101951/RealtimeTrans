@@ -1,5 +1,5 @@
 #!/bin/bash
-# 无参数；清除旧副本后构建并校验 Release ZIP，成功后再安装到访达「应用程序」。
+# 无参数；先强制退出正在运行的 TranslateApp，再清除旧副本、构建并校验 Release ZIP，成功后安装到访达「应用程序」。
 # TRANSLATEAPP_SIGN_IDENTITY 可指定固定签名证书，缺省 TranslateApp Local Signing。
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -25,11 +25,6 @@ fi
 identities="$(security find-identity -v -p codesigning)"
 if ! /usr/bin/grep -Fq "\"$identity\"" <<< "$identities"; then
   echo "未找到有效代码签名身份：$identity。请在钥匙串中完成证书和私钥配置。" >&2
-  exit 1
-fi
-# 运行中的包删不干净，签名也会继续指向旧进程。
-if pgrep -x translate_app >/dev/null; then
-  echo "请先退出所有 TranslateApp，再打包。" >&2
   exit 1
 fi
 
@@ -229,6 +224,36 @@ cleanup_on_exit() {
   [[ -n "$ordered_file" ]] && rm -f "$ordered_file"
   exit "$status"
 }
+
+# 作用：强制结束所有正在运行的 TranslateApp，并等到进程消失。
+# 参数：无。
+# 返回：0 表示已经没有 translate_app 进程。发出 SIGKILL 后 5 秒内进程仍在，则以状态码 1 退出。
+quit_running_apps() {
+  local pid waited
+  if ! pgrep -x translate_app >/dev/null; then
+    return 0
+  fi
+  echo "正在强制退出 TranslateApp…"
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    # SIGKILL 不进入 applicationShouldTerminate，因此不会弹出「退出并丢弃当前采集？」。
+    # 适用条件：打包前允许丢掉未保存采集。媒体流和临时目录的 shutdown 不会执行；若打包必须先做完这些清理，再改为正常退出。
+    kill -9 "$pid" 2>/dev/null || true
+  done < <(pgrep -x translate_app || true)
+  waited=0
+  while pgrep -x translate_app >/dev/null; do
+    if [[ "$waited" -ge 5 ]]; then
+      echo "无法强制退出 TranslateApp。" >&2
+      exit 1
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+}
+
+# quit_running_apps：强制结束正在运行的 TranslateApp。运行中的包删不干净，签名也会继续指向旧进程。
+# 此时尚未注册 EXIT 清理；退出失败不会删掉已有构建产物。
+quit_running_apps
 # 只注册一次 EXIT。后注册的 trap 会替换先注册的，分开清理会留下另一个暂存目录。
 trap cleanup_on_exit EXIT
 
@@ -271,11 +296,8 @@ ditto -c -k --sequesterRsrc --keepParent "$package_stage/TranslateApp.app" "$pac
 mv -f "$package_stage/TranslateApp.zip" "$archive"
 echo "Archive: $PWD/$archive"
 
-# 构建可能耗时较久，开始安装前再确认没有新的 translate_app 进程。
-if pgrep -x translate_app >/dev/null; then
-  echo "请先从菜单栏退出 TranslateApp，再运行安装。" >&2
-  exit 1
-fi
+# quit_running_apps：构建耗时较久，安装前再强制结束期间重新打开的 TranslateApp。
+quit_running_apps
 install_stage="$(mktemp -d "${TMPDIR:-/tmp}/translateapp-install.XXXXXX")"
 ditto -x -k "$archive" "$install_stage"
 codesign --verify --deep --strict "$install_stage/TranslateApp.app"
