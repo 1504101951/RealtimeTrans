@@ -15,3 +15,4 @@
 11. [numbered_batch.dart](numbered_batch.dart)：为批次内段落编号，并把模型的流式输出按编号归属到段落。
 12. [glossary.dart](glossary.dart)：定义术语条目，按目标语言与整词规则筛选本次请求命中的术语。
 13. [translation_http.dart](translation_http.dart)：提供翻译请求共用的 HTTP 客户端，复用与服务之间的连接。
+14. [glossary_file.dart](glossary_file.dart)：校验并解析 CSV/JSON 术语文件，提供导入预览、顺序合并与导出。

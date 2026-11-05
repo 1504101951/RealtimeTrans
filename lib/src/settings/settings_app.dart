@@ -21,6 +21,7 @@ import 'app_settings.dart';
 import 'prompt_editor.dart';
 import 'sticker_upload_dialog.dart';
 import '../screenshot/stickers.dart';
+import '../translation/glossary.dart';
 import 'glossary_editor.dart';
 import 'mcp_platforms.dart';
 import 'mcp_settings_page.dart';
@@ -69,6 +70,7 @@ class _SettingsPageState extends State<_SettingsPage>
   Map<Object?, Object?> _status = {};
   String? _message;
   bool _saving = false;
+  Completer<bool>? _saveCompletion;
   bool _recording = false;
   bool _failed = false;
   bool _dirty = false;
@@ -210,9 +212,15 @@ class _SettingsPageState extends State<_SettingsPage>
     }
   }
 
-  /// 无参数；串行提交当前有效草稿，成功推进版本，失败保留编辑并停止重试。
-  Future<void> _save() async {
-    if (_saving || !_dirty || _conflicted || _adjustingOpacity) return;
+  /// 无参数；串行提交有效草稿并等待当前队列完成，返回是否全部提交成功；失败保留编辑和错误。
+  Future<bool> _save() async {
+    if (_saving) return _saveCompletion!.future;
+    if (!_dirty || _conflicted || _adjustingOpacity) {
+      return !_dirty && !_conflicted;
+    }
+    // 显式导入与后台自动保存等待同一队列；导入不能把“正在保存”当成成功。
+    final completion = Completer<bool>();
+    _saveCompletion = completion;
     setState(() {
       _saving = true;
       _failed = false;
@@ -235,7 +243,7 @@ class _SettingsPageState extends State<_SettingsPage>
           MethodNames.saveSettings,
           {...preferences, 'revision': _revision, 'credentials': credentials},
         ))!;
-        if (!mounted) return;
+        if (!mounted) return false;
         setState(() {
           _revision = saved['revision'] as int;
           _credentialIds = Set<String>.from(
@@ -260,7 +268,7 @@ class _SettingsPageState extends State<_SettingsPage>
         await _refreshStatus();
       }
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         if (error is PlatformException &&
             error.code == ErrorCodes.settingsConflict) {
@@ -275,7 +283,9 @@ class _SettingsPageState extends State<_SettingsPage>
       });
     } finally {
       if (mounted) setState(() => _saving = false);
+      completion.complete(!_dirty && !_conflicted);
     }
+    return !_dirty && !_conflicted;
   }
 
   /// apply 把录制到的键码、修饰键与显示名写入对应快捷键；录制一次按键，取消保留当前组合，无返回值。
@@ -397,14 +407,16 @@ class _SettingsPageState extends State<_SettingsPage>
     });
   }
 
-  /// 无参数；打开术语表管理弹窗，弹窗内每次增删改立即自动保存，返回弹窗关闭的 Future（#104）。
+  /// 无参数；打开术语管理弹窗，单条增删改自动保存，整批导入等待事务，返回弹窗关闭的 Future。
   Future<void> _manageGlossary() => showDialog<void>(
     context: context,
     barrierDismissible: false,
-    // GlossaryManager 每次改动都交回完整列表，由 _edit 写入草稿并自动保存。
+    // GlossaryManager 交回完整列表，单条编辑由 _edit 自动保存，文件导入由 _importGlossary 等待提交。
     builder: (_) => GlossaryManager(
       glossary: _settings!.glossary,
       defaultLanguage: _settings!.primaryLanguage,
+      channel: _channel,
+      onImport: _importGlossary,
       onChanged: (entries) => _edit(
         () => _settings!.glossary
           ..clear()
@@ -412,6 +424,38 @@ class _SettingsPageState extends State<_SettingsPage>
       ),
     ),
   );
+
+  /// entries 为预览确认的完整术语列表；等待真实事务，失败恢复父页术语并抛出错误，文件草稿由预览保留。
+  Future<void> _importGlossary(List<GlossaryEntry> entries) async {
+    // _save 先结束已有事务，再记录父页草稿，避免取消失败导入时回退已成功保存的字段。
+    if (_saving) await _save();
+    if (!mounted) return;
+    final previous = [..._settings!.glossary];
+    final wasDirty = _dirty;
+    // _edit 标记一次完整导入；不在回调外再发起一笔后台提交。
+    _edit(
+      () => _settings!.glossary
+        ..clear()
+        ..addAll(entries),
+      submit: false,
+    );
+    // _save 等待真实事务；失败仅由预览保留导入草稿，取消后其他设置保存不会夹带未成功导入的术语。
+    if (!await _save()) {
+      if (!mounted) return;
+      setState(() {
+        _settings!.glossary
+          ..clear()
+          ..addAll(previous);
+        _dirty = wasDirty;
+      });
+      // 冲突要先刷新设置才能保存；其余失败沿用保存时的提示。
+      throw FormatException(
+        _conflicted
+            ? '设置已在其他窗口修改，请关闭设置窗口后重新打开再导入。'
+            : _message ?? '导入保存失败，请重试。',
+      );
+    }
+  }
 
   /// 无参数；打开提示词弹窗，保存后把提示词与思考开关写入草稿并自动提交，取消不改变，返回弹窗关闭的 Future（#100）。
   Future<void> _editPrompts() async {
