@@ -19,8 +19,8 @@ void main() {
     final saveStarted = Completer<void>();
     var holdSettings = false;
     final directory = Directory.systemTemp.createTempSync('history-channel-');
-    const methods = MethodChannel(ChannelNames.macos);
-    const events = MethodChannel(ChannelNames.macosEvents);
+    const methods = MethodChannel(ChannelNames.platform);
+    const events = MethodChannel(ChannelNames.platformEvents);
     const codec = StandardMethodCodec();
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;

@@ -14,7 +14,7 @@ import 'src/history/history_requests.dart';
 import 'src/history/screenshot_history.dart';
 import 'src/history/translation_history.dart';
 import 'src/history/vocabulary.dart';
-import 'src/platform/macos_platform_bridge.dart';
+import 'src/platform/channel_platform_bridge.dart';
 import 'src/screenshot/screenshot_app.dart';
 import 'src/screenshot/screenshot_translation.dart';
 import 'src/selection/selection_session.dart';
@@ -30,7 +30,8 @@ import 'src/common/constants/text_mode.dart';
 /// 无参数；启动主引擎，初始化失败时让原生弹出实际错误后再抛出，返回启动完成的 Future（#126）。
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final bridge = MacosPlatformBridge();
+  // 组合根：两平台共用的通道适配器同时实现全部平台端口，按端口注入各业务模块。
+  final bridge = ChannelPlatformBridge();
   try {
     // _startApplication 装配配置、存储、会话与跨窗口请求入口。
     await _startApplication(bridge);
@@ -41,8 +42,8 @@ Future<void> main() async {
   }
 }
 
-/// bridge 为主引擎平台桥；装配主引擎唯一的配置、翻译会话、历史存储与跨窗口请求入口，返回装配完成的 Future。
-Future<void> _startApplication(MacosPlatformBridge bridge) async {
+/// bridge 为实现全部平台端口的通道适配器；装配主引擎唯一的配置、翻译会话、历史存储与跨窗口请求入口，返回装配完成的 Future。
+Future<void> _startApplication(ChannelPlatformBridge bridge) async {
   // 启动各阶段计时：读取设置、打开数据库、应用系统配置与整体就绪（#68「性能测量边界」）。
   final total = Stopwatch()..start();
   final stage = Stopwatch()..start();
@@ -265,7 +266,10 @@ Future<void> _startApplication(MacosPlatformBridge bridge) async {
   unawaited(bridge.perfMark('launch-dart-apply', stage));
   runApp(
     TranslateApp(
-      bridge: bridge,
+      selection: bridge,
+      overlay: bridge,
+      speech: bridge,
+      perf: bridge,
       session: session,
       history: history,
       vocabulary: vocabulary,

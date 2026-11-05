@@ -13,7 +13,7 @@ import 'package:translate_app/src/translation/translation_types.dart';
 /// 无参数；用假原生通道验证 Apple 系统翻译的段落配对、错误文案与类别、取消后的输出。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  const methods = MethodChannel(ChannelNames.macos);
+  const methods = MethodChannel(ChannelNames.platform);
   const config = ServiceConfig(
     id: 'apple-local',
     kind: 'apple',

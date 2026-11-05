@@ -18,7 +18,7 @@ import '../translation_types.dart';
 class AppleTranslationProvider implements BatchTranslationProvider {
   /// config 为系统翻译服务配置；channel 为主引擎平台通道，省略时使用 macOS 默认通道。
   AppleTranslationProvider({required this.config, MethodChannel? channel})
-    : _channel = channel ?? const MethodChannel(ChannelNames.macos);
+    : _channel = channel ?? const MethodChannel(ChannelNames.platform);
 
   final ServiceConfig config;
   final MethodChannel _channel;

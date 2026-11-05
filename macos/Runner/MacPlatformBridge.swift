@@ -8,8 +8,8 @@ import FlutterMacOS
 
 /// Dart ↔ Swift 平台通道。不保存翻译状态，不实现 Provider。
 final class MacPlatformBridge: NSObject, FlutterStreamHandler {
-    static let methodChannelName = AppConstants.macosChannel
-    static let eventChannelName = AppConstants.macosEventsChannel
+    static let methodChannelName = AppConstants.platformChannel
+    static let eventChannelName = AppConstants.platformEventsChannel
 
     private var eventSink: FlutterEventSink?
     private let overlay: OverlayPanelController

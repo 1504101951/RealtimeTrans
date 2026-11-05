@@ -355,8 +355,9 @@ enum AppConstants {
     /// translation_unsupported 协议值；系统翻译不支持该语言对，与Dart常量同步。
     static let translationUnsupportedError = "translation_unsupported"
     static let appearanceChannel = "translateapp/appearance"
-    static let macosChannel = "translateapp/macos"
-    static let macosEventsChannel = "translateapp/macos/events"
+    /// 主引擎平台通道与事件通道，与 Dart ChannelNames.platform/platformEvents 同步；Windows 原生实现同一协议。
+    static let platformChannel = "translateapp/platform"
+    static let platformEventsChannel = "translateapp/platform/events"
     static let nativeGlassViewType = "translateapp/native-glass"
     static let undoPressedMethod = "undoPressed"
 

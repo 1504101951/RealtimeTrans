@@ -8,8 +8,8 @@ import '../common/widgets/native_glass.dart';
 import '../history/translation_history.dart';
 import '../history/vocabulary.dart';
 import '../overlay/translation_overlay.dart';
-import '../platform/macos_bridge_event.dart';
-import '../platform/macos_platform_bridge.dart';
+import '../platform/platform_event.dart';
+import '../platform/platform_ports.dart';
 import '../translation/language_direction.dart';
 import '../translation/provider_selection.dart';
 import '../translation/translation_types.dart';
@@ -17,16 +17,23 @@ import 'selection_session.dart';
 
 /// 选区翻译界面与会话协调者；处理原生事件、取消和完整成功后的历史记录。
 class TranslateApp extends StatefulWidget {
-  /// bridge为选区系统能力，session为唯一翻译会话，history为主引擎历史存储，vocabulary为生词本；构造不启动请求。
+  /// selection 为选区读取与输入注入，overlay 为浮层窗口，speech 为朗读，perf 为性能日志；
+  /// session 为唯一翻译会话，history 为主引擎历史存储，vocabulary 为生词本；构造不启动请求。
   const TranslateApp({
     super.key,
-    required this.bridge,
+    required this.selection,
+    required this.overlay,
+    required this.speech,
+    required this.perf,
     required this.session,
     required this.history,
     required this.vocabulary,
   });
 
-  final MacosPlatformBridge bridge;
+  final SelectionPort selection;
+  final OverlayHost overlay;
+  final SpeechPort speech;
+  final PerformanceMarks perf;
   final SelectionSession session;
   final TranslationHistoryStore history;
   final VocabularyStore vocabulary;
@@ -40,7 +47,7 @@ class TranslateApp extends StatefulWidget {
 class _TranslateAppState extends State<TranslateApp> {
   static const _triggerSize = TranslationOverlay.triggerWindowSize;
   static const _resultSize = Size(720, 420);
-  late final StreamSubscription<MacosBridgeEvent> _bridgeSubscription;
+  late final StreamSubscription<PlatformEvent> _bridgeSubscription;
 
   /// 来源在接受选区时冻结，不读取翻译完成后的前台应用。
   String? _sourceAppName;
@@ -53,7 +60,7 @@ class _TranslateAppState extends State<TranslateApp> {
   void initState() {
     super.initState();
     // 订阅跟随界面生命周期，避免重建后由旧界面继续处理选区。
-    _bridgeSubscription = widget.bridge.events.listen(_onBridgeEvent);
+    _bridgeSubscription = widget.selection.events.listen(_onBridgeEvent);
     widget.session.addListener(_syncOverlaySize);
   }
 
@@ -66,7 +73,7 @@ class _TranslateAppState extends State<TranslateApp> {
   }
 
   /// event 为携带 sessionId 的选区或失效事件；同步界面与原生窗口，无返回值。
-  void _onBridgeEvent(MacosBridgeEvent event) {
+  void _onBridgeEvent(PlatformEvent event) {
     switch (event) {
       case SelectionCaptured(
         :final sessionId,
@@ -86,7 +93,7 @@ class _TranslateAppState extends State<TranslateApp> {
         }
         _sourceAppName = sourceAppName;
         // 新选区替换卡片内容，停止朗读旧内容。
-        unawaited(widget.bridge.stopSpeech());
+        unawaited(widget.speech.stopSpeech());
         // 输入翻译会话在完整成功后用译文替换来源输入框中的原文。
         _replaceSessionId = gesture == SelectionGestureTypes.inputHotkey
             ? sessionId
@@ -103,7 +110,7 @@ class _TranslateAppState extends State<TranslateApp> {
         );
         // 没有可用触发态时先退出，后续只处理需要展示的选区。
         if (widget.session.snapshot.phase != TranslationPhase.trigger) {
-          widget.bridge.hideOverlay(sessionId: sessionId);
+          widget.overlay.hideOverlay(sessionId: sessionId);
           return;
         }
         final size = explicit ? _resultSize : _triggerSize;
@@ -112,7 +119,7 @@ class _TranslateAppState extends State<TranslateApp> {
         }
         // 输入翻译全过程不显示按钮或卡片，结果只体现在来源输入框或失败气泡（#99）。
         if (_replaceSessionId == sessionId) return;
-        widget.bridge.showOverlay(
+        widget.overlay.showOverlay(
           sessionId: sessionId,
           x: x,
           y: y,
@@ -140,18 +147,18 @@ class _TranslateAppState extends State<TranslateApp> {
     if (id == null || id == _replaceSessionId) return;
     final phase = widget.session.snapshot.phase;
     if (phase == TranslationPhase.idle) {
-      widget.bridge.hideOverlay(sessionId: id);
+      widget.overlay.hideOverlay(sessionId: id);
       return;
     }
     if (phase == TranslationPhase.trigger) {
-      widget.bridge.setOverlaySize(
+      widget.overlay.setOverlaySize(
         sessionId: id,
         width: _triggerSize.width,
         height: _triggerSize.height,
       );
       return;
     }
-    widget.bridge.setOverlaySize(
+    widget.overlay.setOverlaySize(
       sessionId: id,
       width: _resultSize.width,
       height: _resultSize.height,
@@ -167,7 +174,7 @@ class _TranslateAppState extends State<TranslateApp> {
       return;
     }
     // 先保留窗口，再开始异步补读；期间切 App 不会关闭加载或失败卡片。
-    await widget.bridge.retainOverlay(sessionId: id);
+    await widget.overlay.retainOverlay(sessionId: id);
     // 连续点击等待同一个原生响应时，只允许一次激活及一次成功记录。
     if (widget.session.sessionId != id ||
         (retry
@@ -194,7 +201,7 @@ class _TranslateAppState extends State<TranslateApp> {
     void markFirstToken() {
       if (widget.session.snapshot.translatedText.isEmpty) return;
       widget.session.removeListener(markFirstToken);
-      unawaited(widget.bridge.perfMark('input-first-token', watch!));
+      unawaited(widget.perf.perfMark('input-first-token', watch!));
     }
 
     if (watch != null) widget.session.addListener(markFirstToken);
@@ -205,7 +212,7 @@ class _TranslateAppState extends State<TranslateApp> {
     } else {
       await widget.session.activate(
         readSelection: readSelection
-            ? () => widget.bridge.readSelectionForTranslation(sessionId: id)
+            ? () => widget.selection.readSelectionForTranslation(sessionId: id)
             : null,
       );
     }
@@ -214,7 +221,7 @@ class _TranslateAppState extends State<TranslateApp> {
       // 完整成功才记录 input-complete；失败或取消不产生该阶段。
       if (widget.session.sessionId == id &&
           widget.session.snapshot.phase == TranslationPhase.completed) {
-        unawaited(widget.bridge.perfMark('input-complete', watch));
+        unawaited(widget.perf.perfMark('input-complete', watch));
       }
     }
     // _record 只在翻译模式完整成功时记录历史。
@@ -233,18 +240,18 @@ class _TranslateAppState extends State<TranslateApp> {
     if (snapshot.phase == TranslationPhase.completed) {
       // input-replace 只计 replaceSelection 的耗时。
       final replace = Stopwatch()..start();
-      failure = await widget.bridge.replaceSelection(
+      failure = await widget.selection.replaceSelection(
         sessionId: id,
         text: snapshot.translatedText,
       );
-      unawaited(widget.bridge.perfMark('input-replace', replace));
+      unawaited(widget.perf.perfMark('input-replace', replace));
     } else {
       failure = snapshot.message ?? '翻译失败';
     }
     if (widget.session.sessionId != id) return;
     // showInputFailure 需要原生会话仍在，必须先于 _dismiss 释放会话。
     if (failure != null) {
-      await widget.bridge.showInputFailure(sessionId: id, message: failure);
+      await widget.selection.showInputFailure(sessionId: id, message: failure);
     }
     _dismiss();
   }
@@ -275,7 +282,7 @@ class _TranslateAppState extends State<TranslateApp> {
         ? snapshot.detectedLanguage ?? primary
         : widget.session.outputLanguage ?? primary;
     unawaited(
-      widget.bridge.toggleSpeech(
+      widget.speech.toggleSpeech(
         text: source ? snapshot.sourceText : snapshot.translatedText,
         language: language,
       ),
@@ -287,7 +294,7 @@ class _TranslateAppState extends State<TranslateApp> {
     final id = widget.session.sessionId;
     if (id == null) return;
     // 原文结果都会被替换，先停止朗读旧内容。
-    unawaited(widget.bridge.stopSpeech());
+    unawaited(widget.speech.stopSpeech());
     final sourceLabel = _sourceAppName;
     await widget.session.switchMode(mode);
     _record(
@@ -303,7 +310,7 @@ class _TranslateAppState extends State<TranslateApp> {
     final id = widget.session.sessionId;
     if (id == null) return;
     // 结果会被替换，先停止朗读旧内容。
-    unawaited(widget.bridge.stopSpeech());
+    unawaited(widget.speech.stopSpeech());
     final sourceLabel = _sourceAppName;
     await widget.session.switchService(serviceId);
     _record(
@@ -347,10 +354,10 @@ class _TranslateAppState extends State<TranslateApp> {
   void _dismiss() {
     final id = widget.session.sessionId;
     // 关闭卡片即停止朗读；取消业务请求后，用关闭前的会话 ID 隐藏窗口。
-    unawaited(widget.bridge.stopSpeech());
+    unawaited(widget.speech.stopSpeech());
     widget.session.dismiss();
     if (id != null) {
-      widget.bridge.hideOverlay(sessionId: id);
+      widget.overlay.hideOverlay(sessionId: id);
     }
   }
 
@@ -369,7 +376,7 @@ class _TranslateAppState extends State<TranslateApp> {
         onDrag: () {
           final id = widget.session.sessionId;
           // 原生拖动保持来源应用焦点，并保留当前会话的位置。
-          if (id != null) widget.bridge.dragOverlay(sessionId: id);
+          if (id != null) widget.overlay.dragOverlay(sessionId: id);
         },
       ),
     );

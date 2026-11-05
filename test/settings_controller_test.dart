@@ -204,7 +204,7 @@ void main() {
   });
 
   group('Apple 系统翻译测试连接', () {
-    const methods = MethodChannel(ChannelNames.macos);
+    const methods = MethodChannel(ChannelNames.platform);
     const apple = ServiceConfig(
       id: 'apple-local',
       kind: 'apple',

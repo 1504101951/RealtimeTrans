@@ -11,9 +11,10 @@ abstract final class ChannelNames {
 
   static const appearance = 'translateapp/appearance';
 
-  static const macos = 'translateapp/macos';
+  /// 主引擎平台通道与事件通道；macOS 与 Windows 原生实现同一协议。
+  static const platform = 'translateapp/platform';
 
-  static const macosEvents = 'translateapp/macos/events';
+  static const platformEvents = 'translateapp/platform/events';
 
   static const screenshot = 'translateapp/screenshot';
 

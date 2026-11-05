@@ -16,7 +16,7 @@
 
 主 Flutter 引擎持有唯一偏好与翻译会话。设置窗口按需使用第二引擎的 `settingsMain` 入口，表单通过 `translateapp/settings` 转发到主引擎。保存请求串行处理；修订号阻止旧表单覆盖菜单更新。
 
-`main.dart`装配主引擎模块和跨窗口请求入口。`SettingsController`持有唯一设置快照、修订号与提交队列，通过`SettingsPlatform`提交系统偏好和凭据；`providerForSettings`选择翻译服务。`selection_translation_app.dart`处理选区事件、浮层交互和成功翻译的历史写入。`handleHistoryRequest`直接查询同一个SQLite存储，历史分页与记录开关不等待设置提交或服务测试。
+`main.dart`装配主引擎模块和跨窗口请求入口，是平台端口的组合根：`platform/platform_ports.dart` 按能力定义端口（`SelectionPort`、`OverlayHost`、`SpeechPort`、`TextServices`、`PerformanceMarks`、`AppHost`，以及设置与凭据的 `SettingsPlatform`），`ChannelPlatformBridge` 经 `translateapp/platform` 通道实现全部端口，macOS 与 Windows 原生实现同一协议，业务模块只依赖所需端口。`SettingsController`持有唯一设置快照、修订号与提交队列，通过`SettingsPlatform`提交系统偏好和凭据；`providerForSettings`选择翻译服务。`selection_translation_app.dart`处理选区事件、浮层交互和成功翻译的历史写入。`handleHistoryRequest`直接查询同一个SQLite存储，历史分页与记录开关不等待设置提交或服务测试。
 
 设置模块接收初始配置、公开当前配置和发送提交通知时使用独立副本；协议快照复制可变排除项字典，外部草稿修改不能绕过提交队列。连接测试由设置模块内的独立流程处理，队列只等待其结果。采集启动、暂停、停止、取消和失败清理在异步等待后核对会话或分段资源身份；旧请求不清理新会话或恢复后的新流。
 

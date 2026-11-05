@@ -14,7 +14,7 @@ import 'package:translate_app/src/selection/selection_translation_app.dart'
     show TranslateApp;
 import 'package:translate_app/src/history/translation_history.dart';
 import 'package:translate_app/src/history/vocabulary.dart';
-import 'package:translate_app/src/platform/macos_platform_bridge.dart';
+import 'package:translate_app/src/platform/channel_platform_bridge.dart';
 import 'package:translate_app/src/translation/language_direction.dart';
 import 'package:translate_app/src/overlay/translation_overlay.dart';
 import 'package:translate_app/src/selection/selection_session.dart';
@@ -63,9 +63,14 @@ void main() {
         null,
       );
     });
+    // 同一个通道适配器实现选区应用所需的全部端口。
+    final bridge = ChannelPlatformBridge(methods: methods, events: events);
     await tester.pumpWidget(
       TranslateApp(
-        bridge: MacosPlatformBridge(methods: methods, events: events),
+        selection: bridge,
+        overlay: bridge,
+        speech: bridge,
+        perf: bridge,
         session: session,
         history: TranslationHistoryStore(sqlite3.openInMemory()),
         vocabulary: VocabularyStore(sqlite3.openInMemory()),
