@@ -44,6 +44,17 @@ class _HistoryAppState extends State<HistoryApp> {
   bool _done = false;
   String? _pageError;
   String? _recordingError;
+  bool _failedReset = false;
+  final _search = TextEditingController();
+  final _pageKey = GlobalKey();
+  String _source = '';
+  List<String> _sources = [];
+  DateTime? _from;
+  DateTime? _to;
+  int? _retentionDays;
+  bool _retentionConfirmed = true;
+  bool _managing = false;
+  String? _managementError;
 
   /// 当前分段；生词本分段不显示历史刷新与记录开关。
   _HistorySection _section = _HistorySection.history;
@@ -64,6 +75,7 @@ class _HistoryAppState extends State<HistoryApp> {
     // 首屏与开关独立读取，开关失败不阻止历史浏览。
     _loadMore();
     _loadRecording();
+    _loadManagement(prompt: true);
   }
 
   /// 无参数；读取持久化开关，返回读取结束的 Future。
@@ -103,7 +115,7 @@ class _HistoryAppState extends State<HistoryApp> {
     }
   }
 
-  /// 无参数；按末条游标追加最多 10 条，失败保留原游标，返回加载结束的 Future。
+  /// reset 决定替换首批或按原游标追加；失败保留记录与重试语义，返回读取结束的 Future。
   Future<void> _loadMore({bool reset = false}) async {
     if (!reset && (_loading || _done)) return;
     final version = reset ? ++_requestVersion : _requestVersion;
@@ -117,6 +129,15 @@ class _HistoryAppState extends State<HistoryApp> {
         MethodNames.historyPage,
         {
           'limit': 10,
+          'query': _search.text.trim(),
+          'source': _source,
+          if (_from != null) 'from': _from!.millisecondsSinceEpoch,
+          if (_to != null)
+            'to': DateTime(
+              _to!.year,
+              _to!.month,
+              _to!.day + 1,
+            ).millisecondsSinceEpoch,
           if (last != null)
             'before': {'completedAt': last.completedAt, 'id': last.id},
         },
@@ -131,7 +152,10 @@ class _HistoryAppState extends State<HistoryApp> {
       });
     } on PlatformException catch (error) {
       if (!mounted || version != _requestVersion) return;
-      setState(() => _pageError = error.message ?? '无法读取翻译历史');
+      setState(() {
+        _failedReset = reset;
+        _pageError = error.message ?? '无法读取翻译历史';
+      });
     } finally {
       if (mounted && version == _requestVersion) {
         setState(() => _loading = false);
@@ -140,11 +164,316 @@ class _HistoryAppState extends State<HistoryApp> {
   }
 
   /// 无参数；回到最新记录并重新加载首批，返回刷新完成的 Future。
-  Future<void> _refresh() => _loadMore(reset: true);
+  Future<void> _refresh() async {
+    // 列表与管理元数据分别显示失败，互不阻塞。
+    await Future.wait([_loadMore(reset: true), _loadManagement()]);
+  }
 
+  /// prompt 为首次读取标记；读取来源与期限，必要时提示默认期限确认，返回读取结束的 Future。
+  Future<void> _loadManagement({bool prompt = false}) async {
+    try {
+      // 来源与期限互不依赖，并发读取；任一失败按原异常进入下方的 PlatformException 处理。
+      final results = await Future.wait<Object?>([
+        widget.channel.invokeListMethod<String>(MethodNames.historySources),
+        widget.channel.invokeMapMethod<String, Object?>(
+          MethodNames.historyRetention,
+        ),
+      ]);
+      final sources = results[0] as List<String>?;
+      final retention = results[1] as Map<String, Object?>?;
+      if (!mounted) return;
+      setState(() {
+        _sources = sources!;
+        _retentionDays = retention!['days'] as int;
+        _retentionConfirmed = retention['confirmed'] as bool;
+        _managementError = null;
+      });
+      if (prompt && !_retentionConfirmed) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final context = _pageKey.currentContext;
+          if (context != null && mounted) {
+            _changeRetention(context, _retentionDays!);
+          }
+        });
+      }
+    } on PlatformException catch (error) {
+      if (mounted) {
+        setState(() => _managementError = error.message ?? '无法读取历史管理设置');
+      }
+    }
+  }
+
+  /// context 为窗口内上下文，title/message 为确认说明；返回是否明确确认。
+  Future<bool> _confirm(
+    BuildContext context,
+    String title,
+    String message,
+  ) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (context) => NativeGlassDialog(
+          maxWidth: 520,
+          title: Text(title),
+          content: SingleChildScrollView(child: Text(message)),
+          actions: [
+            NativeGlassSurface(
+              material: true,
+              child: TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('取消'),
+              ),
+            ),
+            NativeGlassSurface(
+              material: true,
+              child: TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('确认'),
+              ),
+            ),
+          ],
+        ),
+      ) ??
+      false;
+
+  /// context 为弹窗上下文，days 为待选期限；预览清理数量并确认后提交，返回操作结束的 Future。
+  Future<void> _changeRetention(BuildContext context, int days) async {
+    setState(() => _managing = true);
+    try {
+      // 预览不修改设置或记录，取消后保持数据库原状。
+      final preview = await widget.channel.invokeMapMethod<String, Object?>(
+        MethodNames.historyRetention,
+        {'days': days},
+      );
+      if (!context.mounted) return;
+      final count = preview!['expiredCount'] as int;
+      if (days != 0 &&
+          !await _confirm(
+            context,
+            '设置历史保留期限',
+            '保留最近 $days 天的翻译历史，将清理 $count 条记录。确认后持续自动清理。',
+          )) {
+        return;
+      }
+      await widget.channel.invokeMethod<void>(MethodNames.setHistoryRetention, {
+        'days': days,
+      });
+      if (mounted) await _refresh();
+    } on PlatformException catch (error) {
+      if (mounted) {
+        setState(() => _managementError = error.message ?? '无法保存历史保留期限');
+      }
+    } finally {
+      if (mounted) setState(() => _managing = false);
+    }
+  }
+
+  /// context 为弹窗上下文；id 非空时删除单条，为空时清空全部翻译历史，返回操作结束的 Future。
+  Future<void> _deleteHistory(BuildContext context, {int? id}) async {
+    final confirmed = await _confirm(
+      context,
+      id == null ? '清空全部翻译历史' : '删除翻译记录',
+      id == null ? '清空全部翻译历史，不受当前筛选范围限制。此操作无法撤销。' : '删除这条翻译记录？此操作无法撤销。',
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _managing = true);
+    try {
+      await widget.channel.invokeMethod<void>(
+        id == null ? MethodNames.clearHistory : MethodNames.deleteHistory,
+        id == null ? null : {'id': id},
+      );
+      if (mounted) await _refresh();
+    } on PlatformException catch (error) {
+      if (mounted) {
+        setState(() => _managementError = error.message ?? '无法删除翻译历史');
+      }
+    } finally {
+      if (mounted) setState(() => _managing = false);
+    }
+  }
+
+  /// context 为日期控件上下文，start 指定起始或结束日期；选择后回到首批，返回选择结束的 Future。
+  Future<void> _pickDate(BuildContext context, {required bool start}) async {
+    final first = start ? DateTime(1970) : _from ?? DateTime(1970);
+    final last = start ? _to ?? DateTime(2100) : DateTime(2100);
+    final chosen = start ? _from : _to;
+    final today = DateTime.now();
+    final initial =
+        chosen ??
+        (today.isBefore(first)
+            ? first
+            : today.isAfter(last)
+            ? last
+            : today);
+    final date = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: first,
+      lastDate: last,
+    );
+    if (date == null || !mounted) return;
+    setState(() {
+      if (start) {
+        _from = date;
+      } else {
+        _to = date;
+      }
+    });
+    // 本地日期按日历的下一天生成排他上界，避免夏令时日长变化。
+    await _loadMore(reset: true);
+  }
+
+  /// context 为窗口内上下文；返回按窗口宽度换行的筛选与管理控件。
+  Widget _buildManagement(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(
+      GlassMetrics.pagePadding,
+      8,
+      GlassMetrics.pagePadding,
+      0,
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            SizedBox(
+              width: 240,
+              height: GlassMetrics.hitSize,
+              child: NativeGlassSurface(
+                material: true,
+                child: TextField(
+                  key: const ValueKey('history-search'),
+                  controller: _search,
+                  decoration: const InputDecoration(
+                    hintText: '搜索原文或译文',
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 7,
+                    ),
+                  ),
+                  onChanged: (_) => _loadMore(reset: true),
+                ),
+              ),
+            ),
+            SizedBox(
+              width: 160,
+              child: NativeGlassMenuButton<String>(
+                value: _source,
+                items: {
+                  '': '全部来源',
+                  for (final source in {
+                    ..._sources,
+                    if (_source.isNotEmpty) _source,
+                  })
+                    source: source,
+                },
+                onChanged: (source) {
+                  setState(() => _source = source);
+                  _loadMore(reset: true);
+                },
+              ),
+            ),
+            NativeGlassSurface(
+              material: true,
+              child: TextButton(
+                onPressed: () => _pickDate(context, start: true),
+                child: Text(
+                  _from == null
+                      ? '起始日期'
+                      : '起始 ${dateText(_from!)}',
+                ),
+              ),
+            ),
+            NativeGlassSurface(
+              material: true,
+              child: TextButton(
+                onPressed: () => _pickDate(context, start: false),
+                child: Text(
+                  _to == null
+                      ? '结束日期'
+                      : '结束 ${dateText(_to!)}',
+                ),
+              ),
+            ),
+            NativeGlassSurface(
+              material: true,
+              child: TextButton(
+                onPressed: () {
+                  setState(() {
+                    _search.clear();
+                    _source = '';
+                    _from = null;
+                    _to = null;
+                  });
+                  _loadMore(reset: true);
+                },
+                child: const Text('清除筛选'),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            const Text('保留期限'),
+            SizedBox(
+              width: 140,
+              child: NativeGlassMenuButton<int>(
+                value: _retentionDays ?? 30,
+                items: TranslationHistoryStore.retentionOptions,
+                onChanged: _retentionDays == null || _managing
+                    ? null
+                    : (days) => _changeRetention(context, days),
+              ),
+            ),
+            NativeGlassSurface(
+              material: true,
+              child: TextButton(
+                onPressed: _managing ? null : () => _deleteHistory(context),
+                child: const Text('清空全部'),
+              ),
+            ),
+            if (!_retentionConfirmed)
+              NativeGlassSurface(
+                material: true,
+                child: TextButton(
+                  onPressed: _managing
+                      ? null
+                      : () => _changeRetention(context, _retentionDays!),
+                  child: const Text('确认保留期限'),
+                ),
+              ),
+          ],
+        ),
+        if (!_retentionConfirmed) const Text('保留期限尚未确认，现有记录不会自动清理。'),
+        if (_managementError != null)
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(_managementError!),
+              NativeGlassSurface(
+                material: true,
+                child: TextButton(
+                  onPressed: _loadManagement,
+                  child: const Text('重新读取管理设置'),
+                ),
+              ),
+            ],
+          ),
+      ],
+    ),
+  );
+
+  /// 无参数；解除通道回调并释放搜索输入，无返回值。
   @override
   void dispose() {
     widget.channel.setMethodCallHandler(null);
+    _search.dispose();
     super.dispose();
   }
 
@@ -157,7 +486,10 @@ class _HistoryAppState extends State<HistoryApp> {
           Text(_pageError!),
           NativeGlassSurface(
             material: true,
-            child: TextButton(onPressed: _loadMore, child: const Text('重试加载')),
+            child: TextButton(
+              onPressed: () => _loadMore(reset: _failedReset),
+              child: const Text('重试加载'),
+            ),
           ),
         ],
       );
@@ -174,7 +506,9 @@ class _HistoryAppState extends State<HistoryApp> {
   /// context 为窗口上下文；返回来源/日期标题与译文优先的历史卡片。
   @override
   Widget build(BuildContext context) {
-    return NativeGlassApp(home: Builder(builder: _buildPage));
+    return NativeGlassApp(
+      home: Builder(key: _pageKey, builder: _buildPage),
+    );
   }
 
   /// 内层context订阅当前主题，确保列表缓存的显式文本样式也随外观重建。
@@ -247,6 +581,8 @@ class _HistoryAppState extends State<HistoryApp> {
           ),
           _HistorySection.history => Column(
             children: [
+              // 管理控件位于分段下方，保持正文独立滚动。
+              _buildManagement(context),
               if (_recordingError != null)
                 ListTile(
                   title: Text(_recordingError!),
@@ -309,16 +645,41 @@ class _HistoryAppState extends State<HistoryApp> {
                                 runSpacing: 8,
                                 children: [
                                   Text(
-                                    item.sourceLabel ?? '未记录来源',
+                                    item.sourceLabel == null ||
+                                            item.sourceLabel!.isEmpty
+                                        ? TranslationHistoryStore.unknownSource
+                                        : item.sourceLabel!,
                                     style: Theme.of(context)
                                         .textTheme
                                         .titleMedium,
                                   ),
-                                  Text(
-                                    timestamp,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall,
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        timestamp,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      NativeGlassSurface(
+                                        material: true,
+                                        child: IconButton(
+                                          tooltip: '删除翻译记录',
+                                          onPressed: _managing
+                                              ? null
+                                              : () => _deleteHistory(
+                                                  context,
+                                                  id: item.id,
+                                                ),
+                                          icon: const Icon(
+                                            Icons.delete_outline,
+                                            size: GlassMetrics.icon,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),

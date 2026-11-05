@@ -99,6 +99,48 @@ void main() {
     await request(MethodNames.setHistoryRecording, {'enabled': false});
     expect(history.recordingEnabled, isFalse);
     expect(await request(MethodNames.historyPage, {'limit': 10}), isEmpty);
+    // 新的查询与管理协议同样不等待设置队列；验证实际筛选、计数和删除结果。
+    await request(MethodNames.setHistoryRetention, {'days': 0});
+    await request(MethodNames.setHistoryRecording, {'enabled': true});
+    for (final stamp in [1, DateTime.now().millisecondsSinceEpoch]) {
+      history.insert(
+        sourceText: 'source',
+        translatedText: '译文',
+        detectedLanguage: 'en',
+        targetLanguage: 'zh',
+        providerId: 'test',
+        completedAt: stamp,
+        sourceLabel: 'Safari',
+      );
+    }
+    expect(await request(MethodNames.historySources), ['Safari']);
+    final filtered = await request(MethodNames.historyPage, {
+      'query': '译文',
+      'source': 'Safari',
+      'from': 1,
+      'to': 2,
+    }) as List;
+    expect(filtered, hasLength(1));
+    expect(
+      (await request(MethodNames.historyRetention, {'days': 30})
+          as Map)['expiredCount'],
+      1,
+    );
+    await request(MethodNames.setHistoryRetention, {'days': 30});
+    expect(history.page(), hasLength(1));
+    await request(MethodNames.deleteHistory, {'id': history.page().single.id});
+    expect(history.page(), isEmpty);
+    history.insert(
+      sourceText: 'last',
+      translatedText: '最后',
+      detectedLanguage: 'en',
+      targetLanguage: 'zh',
+      providerId: 'test',
+      completedAt: DateTime.now().millisecondsSinceEpoch,
+    );
+    await request(MethodNames.clearHistory);
+    expect(history.page(), isEmpty);
+    await request(MethodNames.setHistoryRecording, {'enabled': false});
     expect(detection.isCompleted, isFalse);
     expect(saving.isCompleted, isFalse);
     saving.complete();

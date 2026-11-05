@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import '../common/constants/method_names.dart';
 import 'translation_history.dart';
 
-/// history为主引擎唯一存储，call为分页或记录开关请求；返回记录字典列表、布尔值或null。
+/// history 为主引擎唯一存储，call 为查询或管理请求；返回记录、来源、偏好字典、布尔值或 null。
 Object? handleHistoryRequest(TranslationHistoryStore history, MethodCall call) {
   switch (call.method) {
     case MethodNames.historyPage:
@@ -12,6 +12,10 @@ Object? handleHistoryRequest(TranslationHistoryStore history, MethodCall call) {
       // page使用固定10条和时间/ID双游标，新插入记录不会挤动已读页面。
       return [
         for (final row in history.page(
+          query: map['query'] as String?,
+          source: map['source'] as String?,
+          from: map['from'] as int?,
+          to: map['to'] as int?,
           before: cursor == null
               ? null
               : (
@@ -31,6 +35,30 @@ Object? handleHistoryRequest(TranslationHistoryStore history, MethodCall call) {
             'sourceLabel': row.sourceLabel,
           },
       ];
+    case MethodNames.historySources:
+      // 来源菜单使用 Store 的同一期限和未知来源分组。
+      return history.sources();
+    case MethodNames.historyRetention:
+      final map = Map<Object?, Object?>.from(call.arguments as Map? ?? {});
+      return {
+        'days': history.retentionDays,
+        'confirmed': history.retentionConfirmed,
+        'expiredCount': history.expiredCount(
+          map['days'] as int? ?? history.retentionDays,
+        ),
+      };
+    case MethodNames.setHistoryRetention:
+      final map = Map<Object?, Object?>.from(call.arguments as Map);
+      // 请求只在窗口确认后发出，偏好与删除由 Store 原子提交。
+      history.setRetention(map['days'] as int);
+      return null;
+    case MethodNames.deleteHistory:
+      final map = Map<Object?, Object?>.from(call.arguments as Map);
+      history.delete(map['id'] as int);
+      return null;
+    case MethodNames.clearHistory:
+      history.clear();
+      return null;
     case MethodNames.historyRecording:
       return history.recordingEnabled;
     case MethodNames.setHistoryRecording:

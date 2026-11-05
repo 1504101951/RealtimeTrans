@@ -49,7 +49,12 @@ class TranslationRecord {
 
 /// SQLite 翻译历史；只在整篇成功后写入。database 由调用方提供以便测试用内存库。
 class TranslationHistoryStore {
-  TranslationHistoryStore(this.database, {this.onChanged}) {
+  /// database 为唯一历史数据库，now 为期限比较的时钟；初始化表及持久偏好。
+  TranslationHistoryStore(
+    this.database, {
+    this.onChanged,
+    DateTime Function()? now,
+  }) : _now = now ?? DateTime.now {
     database.execute('''
 CREATE TABLE IF NOT EXISTS translation_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,9 +85,135 @@ CREATE TABLE IF NOT EXISTS history_meta (
 INSERT INTO history_meta(key, value) VALUES('recording', '1')
 ON CONFLICT(key) DO NOTHING
 ''');
+    // 默认期限先等待已有过期记录的确认；无过期记录时可直接应用。
+    database.execute('''
+INSERT INTO history_meta(key, value) VALUES('retention_days', '30')
+ON CONFLICT(key) DO NOTHING;
+INSERT INTO history_meta(key, value) VALUES('retention_confirmed', '0')
+ON CONFLICT(key) DO NOTHING;
+''');
+    if (!retentionConfirmed && expiredCount(retentionDays) == 0) {
+      database.execute(
+        "UPDATE history_meta SET value = '1' WHERE key = 'retention_confirmed'",
+      );
+    }
+    // 启动时按已确认期限清理一次，之后由写入与设置期限继续清理。
+    _prune();
   }
 
   final Database database;
+  final DateTime Function() _now;
+
+  /// 没有来源名称的记录在筛选与列表中显示的名称，Store 与窗口共用。
+  static const unknownSource = '未记录来源';
+
+  /// 可用保留天数；0 表示永久，Store 与窗口使用同一组选项。
+  static const retentionOptions = {
+    30: '30 天',
+    90: '90 天',
+    365: '365 天',
+    0: '永久保留',
+  };
+
+  /// 无参数；返回已存期限天数，0 表示永久。
+  int get retentionDays => int.parse(
+    database
+            .select(
+              "SELECT value FROM history_meta WHERE key = 'retention_days'",
+            )
+            .single['value']
+        as String,
+  );
+
+  /// 无参数；返回期限是否已获确认并允许自动清理。
+  bool get retentionConfirmed =>
+      database
+          .select(
+            "SELECT value FROM history_meta WHERE key = 'retention_confirmed'",
+          )
+          .single['value'] ==
+      '1';
+
+  /// days 为待应用天数；返回严格早于完成时间边界的记录数，永久为 0。
+  int expiredCount(int days) {
+    if (!retentionOptions.containsKey(days)) {
+      throw ArgumentError.value(days, 'days');
+    }
+    if (days == 0) return 0;
+    final cutoff = _now().subtract(Duration(days: days)).millisecondsSinceEpoch;
+    return database.select(
+          'SELECT COUNT(*) AS count FROM translation_history WHERE completed_at < ?',
+          [cutoff],
+        ).single['count']
+        as int;
+  }
+
+  /// days 为用户确认的期限；事务保存偏好并清理过期记录，无返回值。
+  void setRetention(int days) {
+    if (!retentionOptions.containsKey(days)) {
+      throw ArgumentError.value(days, 'days');
+    }
+    database.execute('BEGIN');
+    try {
+      // 先按原期限删除已过期记录：读取只过滤不删除，改为更长期限时不能让已过期记录重新出现。
+      _prune();
+      database.execute(
+        "UPDATE history_meta SET value = ? WHERE key = 'retention_days'",
+        ['$days'],
+      );
+      database.execute(
+        "UPDATE history_meta SET value = '1' WHERE key = 'retention_confirmed'",
+      );
+      // 清理和偏好处于同一事务，失败不能留下已应用的设置。
+      _prune();
+      database.execute('COMMIT');
+    } catch (_) {
+      database.execute('ROLLBACK');
+      rethrow;
+    }
+    onChanged?.call();
+  }
+
+  /// 无参数；返回已确认期限的完成时间下界（毫秒），未确认或永久保留时为 null。
+  int? _cutoff() {
+    if (!retentionConfirmed || retentionDays == 0) return null;
+    return _now().subtract(Duration(days: retentionDays)).millisecondsSinceEpoch;
+  }
+
+  /// 无参数；按已确认期限删除过期记录，无返回值；只在写入、设置期限与启动时调用，调用方负责通知。
+  void _prune() {
+    final cutoff = _cutoff();
+    if (cutoff == null) return;
+    database.execute('DELETE FROM translation_history WHERE completed_at < ?', [
+      cutoff,
+    ]);
+  }
+
+  /// id 为待删记录主键；只删除该翻译记录，成功后通知，无返回值。
+  void delete(int id) {
+    database.execute('DELETE FROM translation_history WHERE id = ?', [id]);
+    if (database.updatedRows > 0) onChanged?.call();
+  }
+
+  /// 无参数；清空全部翻译历史并通知，不操作其他表，无返回值。
+  void clear() {
+    database.execute('DELETE FROM translation_history');
+    if (database.updatedRows > 0) onChanged?.call();
+  }
+
+  /// 无参数；返回期限内的来源名称，空来源统一为 unknownSource。
+  List<String> sources() {
+    // 与列表查询使用同一期限下界，读取不删除记录。
+    final cutoff = _cutoff();
+    return [
+      for (final row in database.select(
+        "SELECT DISTINCT COALESCE(NULLIF(source_label, ''), ?) AS source FROM translation_history"
+        '${cutoff == null ? '' : ' WHERE completed_at >= ?'} ORDER BY source COLLATE NOCASE',
+        [unknownSource, ?cutoff],
+      ))
+        row['source'] as String,
+    ];
+  }
 
   /// 成功落库后的变更信号，不包含原文等隐私内容。
   final void Function()? onChanged;
@@ -95,6 +226,7 @@ ON CONFLICT(key) DO NOTHING
     return rows.first['value'] == '1';
   }
 
+  /// value 为是否记录后续成功翻译；保存偏好而不改动已有记录，无返回值。
   set recordingEnabled(bool value) {
     database.execute(
       "INSERT INTO history_meta(key, value) VALUES('recording', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -102,7 +234,7 @@ ON CONFLICT(key) DO NOTHING
     );
   }
 
-  /// 成功翻译写入一条；recording 关闭时忽略。
+  /// 文本、语言、服务及可选模型/来源为完整成功结果，completedAt 为完成毫秒；写入后通知，无返回值。
   void insert({
     required String sourceText,
     required String translatedText,
@@ -129,22 +261,60 @@ ON CONFLICT(key) DO NOTHING
         sourceLabel,
       ],
     );
+    // 新增记录同样执行已确认期限，成功写入只发一次变更。
+    _prune();
     onChanged?.call();
   }
 
-  /// before 为上一页末条位置，首屏为空；limit 为正数；返回完成时间倒序记录。
-  List<TranslationRecord> page({HistoryCursor? before, int limit = 10}) {
+  /// before 为末条游标；query 匹配原文/译文，source 匹配来源；from 含、to 不含毫秒。
+  /// limit 为正数；返回全部条件交集内按完成时间与 ID 倒序的记录。
+  List<TranslationRecord> page({
+    HistoryCursor? before,
+    int limit = 10,
+    String? query,
+    String? source,
+    int? from,
+    int? to,
+  }) {
     if (limit < 1) throw ArgumentError.value(limit, 'limit', '必须为正数');
+    final conditions = <String>[];
+    final parameters = <Object?>[];
+    // 读取按已确认期限过滤，不删除记录；删除只在写入、设置期限与启动时进行。
+    final cutoff = _cutoff();
+    if (cutoff != null) {
+      conditions.add('completed_at >= ?');
+      parameters.add(cutoff);
+    }
+    if (before != null) {
+      conditions.add('(completed_at, id) < (?, ?)');
+      parameters.addAll([before.completedAt, before.id]);
+    }
+    if (query != null && query.isNotEmpty) {
+      // instr 将 %、_ 视为普通关键词字符；ASCII 通过 lower 忽略大小写。
+      conditions.add(
+        '(instr(lower(source_text), lower(?)) > 0 OR instr(lower(translated_text), lower(?)) > 0)',
+      );
+      parameters.addAll([query, query]);
+    }
+    if (source != null && source.isNotEmpty) {
+      conditions.add("COALESCE(NULLIF(source_label, ''), ?) = ?");
+      parameters.addAll([unknownSource, source]);
+    }
+    if (from != null) {
+      conditions.add('completed_at >= ?');
+      parameters.add(from);
+    }
+    if (to != null) {
+      conditions.add('completed_at < ?');
+      parameters.add(to);
+    }
     // 使用稳定游标，浏览过程中新增翻译不会挤动 OFFSET 导致重复或漏项。
     final rows = database.select(
       '''SELECT id, source_text, translated_text, detected_language, target_language, provider_id, model, completed_at, source_label
          FROM translation_history
-         ${before == null ? '' : 'WHERE (completed_at, id) < (?, ?)'}
+         ${conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}'}
          ORDER BY completed_at DESC, id DESC LIMIT ?''',
-      [
-        if (before != null) ...[before.completedAt, before.id],
-        limit,
-      ],
+      [...parameters, limit],
     );
     return [
       for (final row in rows)
