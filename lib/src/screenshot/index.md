@@ -6,7 +6,7 @@
 2. [index.md](index.md)：索引本目录直接子文件和子目录的用途。
 3. [screenshot_app.dart](screenshot_app.dart)：实现截图画布、采集工具组、文字编辑和导出操作。
 4. [screenshot_editor_layout.dart](screenshot_editor_layout.dart)：计算工具栏避让布局并保持截图画布位置与比例。
-5. [screenshot_translation.dart](screenshot_translation.dart)：编排截图OCR文本的语言识别、翻译和历史写入。
+5. [screenshot_translation.dart](screenshot_translation.dart)：编排截图与图片 OCR 文本的语言识别、可取消分片翻译及有效完整结果的历史写入。
 
 6. [drawing_style.dart](drawing_style.dart)：定义不可变共享绘制样式与工具能力。
 7. [drawing_controls.dart](drawing_controls.dart)：提供带应用和取消语义的独立调色盘与粗细选择控件。

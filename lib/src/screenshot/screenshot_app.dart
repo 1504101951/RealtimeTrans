@@ -2565,7 +2565,9 @@ class _ScreenshotAppState extends State<ScreenshotApp> {
                                 fontSize: 15,
                               ),
                             ),
-                            if (_capture['screenAccess'] == false) ...[
+                            // 普通图片的解码失败不要求屏幕权限，imageScale 标识普通图片画布。
+                            if (_capture['screenAccess'] == false &&
+                                _capture['imageScale'] == null) ...[
                               const SizedBox(height: 16),
                               NativeGlassSurface(
                                 material: true,

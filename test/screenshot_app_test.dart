@@ -224,10 +224,7 @@ void main() {
           return null;
         case MethodNames.saveScreenshot:
           if (saveError != null) {
-            throw PlatformException(
-              code: 'save_failed',
-              message: saveError,
-            );
+            throw PlatformException(code: 'save_failed', message: saveError);
           }
           final args = call.arguments as Map;
           expect(args['bytes'], isA<Uint8List>());
@@ -351,6 +348,94 @@ void main() {
     await tester.pumpAndSettle();
     expect(requested, isTrue);
     expect(find.byKey(const Key('screenshot-canvas')), findsNothing);
+  });
+
+  testWidgets('无屏幕权限的导入图片保留选区、像素与OCR翻译，屏幕采集入口禁用', (tester) async {
+    // 作用：普通图片按 BGRA 与 imageScale 进入现有编辑器，识别与翻译仍消费真实图片。
+    // 边界：screenAccess=false 且 canCaptureMedia=false 不阻拦本地图片；8×8 红蓝图用于验证通道顺序与完整选区。
+    tester.view.physicalSize = const Size(960, 740);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final bytes = await tester.runAsync(_pngCheckerboard);
+    final capture = await tester.runAsync(() => capturePixels(bytes!));
+    const channel = MethodChannel('test/screenshot-imported-image');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    Uint8List? recognizedPixels;
+    String? clipboard;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case MethodNames.getScreenshot:
+          return {
+            'id': 'imported-image',
+            ...capture!,
+            'capturedAt': 1788662400000,
+            'imageScale': 1.0,
+            'screenAccess': false,
+            'canCaptureMedia': false,
+            'directory': '',
+          };
+        case MethodNames.recognizeText:
+          recognizedPixels = (call.arguments as Map)['bytes'] as Uint8List;
+          return {'text': 'Imported text', 'codes': <Object>[]};
+        case MethodNames.copyText:
+          clipboard = (call.arguments as Map)['text'] as String;
+          return null;
+        case MethodNames.recognizeBlocks:
+          return [
+            {'text': 'Imported text', 'x': 0, 'y': 0, 'width': 4, 'height': 2},
+          ];
+        case MethodNames.translatePlainText:
+          return '导入图片译文';
+        default:
+          return null;
+      }
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    await tester.pumpWidget(const ScreenshotApp(channel: channel));
+    // awaitCaptureSource 等待 BGRA 解码完成；选区尺寸属于实际装入的图片。
+    await awaitCaptureSource(tester);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('screenshot-canvas')), findsOneWidget);
+    expect(find.text('8 × 8'), findsOneWidget);
+    expect(find.text('申请屏幕录制权限'), findsNothing);
+    expect(find.textContaining('截图需要屏幕录制权限'), findsNothing);
+    for (final action in [
+      ScreenshotActions.record,
+      ScreenshotActions.scrolling,
+      ScreenshotActions.live,
+    ]) {
+      expect(
+        tester.widget<IconButton>(find.byKey(Key(action))).onPressed,
+        isNull,
+      );
+    }
+
+    // _tapExport 让识别消费编辑器实际导出的 PNG，并展示可复制的文字结果。
+    await _tapExport(tester, const Key(ScreenshotActions.ocrCopy));
+    expect(find.text('Imported text'), findsOneWidget);
+    await tester.tap(find.byTooltip('复制全部'));
+    await tester.pump();
+    expect(clipboard, 'Imported text');
+    await tester.runAsync(() async {
+      // _decode 与 _pixel 验证 OCR 收到的全图红蓝像素，不能用空画布代替有效导入。
+      final image = await _decode(recognizedPixels!);
+      expect(image.width, 8);
+      expect(image.height, 8);
+      expect(_nearColor(await _pixel(image, 1, 1), _red), isTrue);
+      expect(_nearColor(await _pixel(image, 6, 6), _blue), isTrue);
+      image.dispose();
+    });
+    await tester.tap(find.byTooltip('关闭').last);
+    await tester.pump();
+    // _tapExport 复用图上翻译入口，导入图片同样在识别位置显示译文。
+    await _tapExport(tester, const Key(ScreenshotActions.ocrTranslate));
+    expect(find.text('导入图片译文'), findsOneWidget);
+    expect(find.text('已在图上显示译文'), findsOneWidget);
+    expect(find.byKey(const Key('screenshot-canvas')), findsOneWidget);
+    expect(find.text('申请屏幕录制权限'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('识别结果渲染 Markdown，复制全部保存原文且弹窗保留到手动关闭', (tester) async {
@@ -1120,9 +1205,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('美化行选择背景后复制输出扩出内边距的图片，贴图仍是原图，切换工具收起美化行', (
-    tester,
-  ) async {
+  testWidgets('美化行选择背景后复制输出扩出内边距的图片，贴图仍是原图，切换工具收起美化行', (tester) async {
     // 边界：倍率 1、默认内边距 64pt，64px 原图复制后为 192px；贴图不受美化影响。
     tester.view.physicalSize = const Size(900, 900);
     tester.view.devicePixelRatio = 1;

@@ -64,6 +64,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         displays.submenu = displayMenu
         self.displayMenu = displayMenu
         menu.addItem(displays)
+        let image = NSMenuItem(title: "打开图片…", action: #selector(openImage), keyEquivalent: "")
+        image.target = self
+        menu.addItem(image)
+        let clipboard = NSMenuItem(title: "从剪贴板打开图片", action: #selector(openClipboardImage), keyEquivalent: "")
+        clipboard.target = self
+        menu.addItem(clipboard)
         let stop = NSMenuItem(title: "停止采集", action: #selector(stopCapture), keyEquivalent: "")
         stop.target = self
         stop.isEnabled = MacPlatformBridge.Shared.instance?.capture.canStop == true
@@ -200,6 +206,16 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     /// 无参数；菜单关闭后进入系统区域框选，不触发翻译，无返回值。
     @objc private func captureScreenshot() {
         DispatchQueue.main.async { MacPlatformBridge.Shared.instance?.screenshot.capture() }
+    }
+
+    /// 无参数；菜单关闭后选择图片并交给现有编辑器，无返回值。
+    @objc private func openImage() {
+        DispatchQueue.main.async { MacPlatformBridge.Shared.instance?.screenshot.openImage() }
+    }
+
+    /// 无参数；菜单关闭后把剪贴板图片交给现有编辑器，无返回值。
+    @objc private func openClipboardImage() {
+        DispatchQueue.main.async { MacPlatformBridge.Shared.instance?.screenshot.openClipboardImage() }
     }
 
     /// sender 的 tag 为显示器 ID；冻结该显示器并选中整屏，无返回值（#105）。

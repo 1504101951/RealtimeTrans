@@ -1,6 +1,8 @@
 import Cocoa
 import CoreGraphics
 import FlutterMacOS
+import ImageIO
+import UniformTypeIdentifiers
 
 /// 系统截图模块承接权限与冻结帧；Dart 编辑层负责框选变暗、标注与导出。
 final class ScreenshotWindowController: NSObject, NSWindowDelegate {
@@ -81,7 +83,15 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
     private var selectedScale: CGFloat = 1
     /// 冻结帧源图（BGRA）；冻结视图直接显示，快照以原始字节交给截图引擎（#68 批次 A）。
     private var image: CGImage?
-    private var captureId: String?
+    private var captureId: String? {
+        didSet {
+            guard let oldValue, oldValue != captureId else { return }
+            // 捕获身份改变统一结束主引擎翻译，覆盖关闭、换图、失败和退出。
+            MacPlatformBridge.Shared.instance?.requestApplication(
+                AppConstants.cancelScreenshotTranslationMethod, arguments: ["id": oldValue]
+            ) { _ in }
+        }
+    }
     /// 截图已关闭或被替换时回给 Dart 的错误；所有按截图身份校验的方法共用同一文案（#124）。
     private static let staleCaptureFailure = FlutterError(
         code: AppConstants.staleCaptureError, message: "截图已关闭或被替换，请重新截图。", details: nil)
@@ -103,6 +113,8 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
     /// 贴图与编辑窗分离；关闭编辑不销毁已贴出的图。
     let pins = PinOverlayController()
     var onCapturingChanged: ((Bool) -> Void)?
+    /// 冻结编辑层是否显示；显示时由平台桥收起实时翻译浮层（#1）。
+    var onFrozenEditorVisibleChanged: ((Bool) -> Void)?
     /// source为已选择来源，scrolling指定长截图，region为校验后的选区；协调器启动真实采集。
     var onPrepareCapture: (@MainActor ([String: Any], Bool, MediaCaptureService.Region?) async throws -> Void)?
     var onPreviewLiveRegion: (@MainActor (NSScreen?) -> Void)?
@@ -114,6 +126,101 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
 
     /// 无参数；返回已完成的冻结帧身份，换帧期间和媒体结果图片均不能发起屏幕采集。
     var liveCaptureID: String? { !capturing && displaysFrozenScreen && image != nil ? captureId : nil }
+
+    /// 无参数；选择系统可解码的图片，取消选择保留当前草稿，无返回值。
+    func openImage() {
+        guard !capturing, window?.attachedSheet == nil else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "打开图片进行标注、识别或翻译"
+        NSApp.activate()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        // loadImage 在后台读取与解码，源文件始终只读。
+        loadImage { try Data(contentsOf: url) }
+    }
+
+    /// 无参数；读取剪贴板图片，缺少图片时明确提示，不读取剪贴板里的文件路径，无返回值。
+    func openClipboardImage() {
+        guard !capturing, window?.attachedSheet == nil else { return }
+        guard let source = (pasteboard.readObjects(forClasses: [NSImage.self]) as? [NSImage])?.first,
+              let data = source.tiffRepresentation else {
+            let alert = NSAlert()
+            alert.messageText = "剪贴板中没有可读取的图片"
+            alert.informativeText = "请先复制图片，再从剪贴板打开。"
+            NSApp.activate()
+            alert.runModal()
+            return
+        }
+        // loadImage 与文件入口共用解码和草稿生命周期。
+        loadImage { data }
+    }
+
+    /// read 提供图片文件字节；后台解码并创建普通编辑窗口，关闭后的迟到结果被丢弃，无返回值。
+    private func loadImage(_ read: @escaping @Sendable () throws -> Data) {
+        MainActor.assumeIsolated { MacPlatformBridge.Shared.instance?.capture.cancelCountdown() }
+        // cancelCapture 结束旧图的翻译、编辑草稿和跨屏预览。
+        cancelCapture()
+        window?.orderOut(nil)
+        displaysFrozenScreen = false
+        selectedDisplayID = 0
+        selectedScale = NSScreen.main?.backingScaleFactor ?? 1
+        displayFrame = NSScreen.main?.visibleFrame ?? displayFrame
+        capturing = true
+        onCapturingChanged?(true)
+        captureTask = Task { @MainActor in
+            defer {
+                self.capturing = false
+                self.captureTask = nil
+                self.onCapturingChanged?(false)
+            }
+            let decoding = Task.detached { try Self.decodeImage(read()) }
+            do {
+                let decoded = try await withTaskCancellationHandler {
+                    try await decoding.value
+                } onCancel: { decoding.cancel() }
+                try Task.checkCancellation()
+                self.image = decoded
+                self.pixels = NSSize(width: decoded.width, height: decoded.height)
+                self.captureId = UUID().uuidString
+                self.capturedAt = Int64(Date().timeIntervalSince1970 * 1000)
+                self.initialCrop = NSRect(origin: .zero, size: self.pixels)
+                self.initialCropSelected = true
+                // show 复用编辑引擎；普通图片不创建屏幕捕获身份。
+                self.show(compact: false)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.message = error.localizedDescription
+                self.show(compact: true)
+            }
+        }
+    }
+
+    /// data 为系统支持的图片字节；返回首帧、方向归正且保留原尺寸的 sRGB BGRA 图像，解码失败抛错。
+    static func decodeImage(_ data: Data) throws -> CGImage {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+              ] as CFDictionary),
+              let context = CGContext(data: nil, width: decoded.width, height: decoded.height,
+                bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadCorruptFileError,
+                              userInfo: [NSLocalizedDescriptionKey: "无法解码图片，请选择系统支持的图片文件。"]) }
+        // 统一像素格式供现有 Flutter BGRA 编辑通道读取，保留透明度。
+        context.draw(decoded, in: CGRect(x: 0, y: 0, width: decoded.width, height: decoded.height))
+        try Task.checkCancellation()
+        guard let image = context.makeImage() else {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadCorruptFileError,
+                          userInfo: [NSLocalizedDescriptionKey: "无法创建图片像素。"])
+        }
+        return image
+    }
 
     /// 无参数；在用户选定录制目标后收起冻结编辑层，释放该截图会话，无返回值。
     func closeForCapture() {
@@ -128,6 +235,8 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
     func hideForCapture() {
         clearTargetPreviews()
         window?.orderOut(nil)
+        // 冻结画面已撤下，恢复实时翻译浮层供录制期间使用。
+        onFrozenEditorVisibleChanged?(false)
     }
 
     /// 无参数；采集准备失败或取消时重新显示同一编辑会话，不重新读取屏幕。
@@ -135,6 +244,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         guard liveCaptureID != nil else { return }
         // 恢复同一目标的其他显示器预览，Flutter本屏裁剪与工具选择保持原样。
         if let source = previewSource { previewTarget(kind: source.kind, applicationID: source.applicationID) }
+        onFrozenEditorVisibleChanged?(true)
         window?.makeKeyAndOrderFront(nil)
     }
 
@@ -144,6 +254,8 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         // 截图入口都在主线程调用（菜单、热键与通道回调），不在主线程时直接中止。
         MainActor.assumeIsolated { MacPlatformBridge.Shared.instance?.capture.cancelCountdown() }
         guard !capturing, window?.attachedSheet == nil else { return }
+        // 新捕获开始即使旧身份失效，不等待权限或新帧返回才取消旧翻译。
+        captureId = nil
         displaysFrozenScreen = true
         capturing = true
         // 替换冻结帧时撤下上一张截图的跨屏预览。
@@ -231,6 +343,8 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         message = nil
         initialCrop = nil
         freezeView.image = nil
+        // 草稿结束即恢复实时翻译浮层。
+        onFrozenEditorVisibleChanged?(false)
         // snapshot 将已清空的草稿通知仍保留的编辑引擎。
         channel?.invokeMethod(AppConstants.screenshotChangedMethod, arguments: snapshot())
     }
@@ -238,6 +352,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
     /// 无参数；关闭编辑窗并关闭引擎，保留已创建的贴图。
     func shutdown() {
         cancelCapture()
+        if let window { DockPresence.leave(window) }
         window?.delegate = nil
         window?.close()
         window = nil
@@ -649,6 +764,7 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
             let content = old.contentViewController!
             old.contentViewController = nil
             old.delegate = nil
+            DockPresence.leave(old)
             old.close()
             window = makeWindow(content: content, overlay: overlay)
         }
@@ -659,12 +775,15 @@ final class ScreenshotWindowController: NSObject, NSWindowDelegate {
         installFreezeImage(compact: compact)
         window?.displayIfNeeded()
         channel?.invokeMethod(AppConstants.screenshotChangedMethod, arguments: snapshot())
+        // 冻结画面显示时收起实时浮层；普通图片与提示窗不涉及冻结画面。
+        onFrozenEditorVisibleChanged?(displaysFrozenScreen && !compact)
         if overlay {
             // 冻结选择不激活应用，避免设置窗跟随弹出。
             if NSApp.isHidden { NSApp.unhideWithoutActivation() }
             window?.orderFrontRegardless()
             window?.makeKey()
         } else {
+            if let window { DockPresence.enter(window) }
             NSApp.activate()
             window?.makeKeyAndOrderFront(nil)
         }
@@ -978,6 +1097,7 @@ final class ScreenshotPanel: NSPanel {
 extension ScreenshotWindowController {
     /// notification 为编辑窗关闭通知；释放原始图像并通知 Dart 清空，不撤销已导出文件或贴图。
     func windowWillClose(_ notification: Notification) {
+        if let window = notification.object as? NSWindow { DockPresence.leave(window) }
         // cancelCapture 统一清理待启动窗口、冻结任务和当前草稿，保留引擎供下次截图复用。
         cancelCapture()
     }
