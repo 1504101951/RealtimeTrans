@@ -494,4 +494,40 @@ void main() {
     await tester.pumpAndSettle();
     expect(chosen, ['gpt']);
   });
+
+  testWidgets('已完成卡片的服务选项更新后移除已删服务并保留当前结果', (tester) async {
+    // 边界：A 已完成且 B 未被当前卡片使用；只更新服务选项，不能关闭会话或清空 A 的原文译文。
+    final session =
+        SelectionSession(
+            provider: _Provider(),
+            detectLanguage: (_) async => 'en',
+            language: const LanguageDirection(primaryCode: 'zh-CN'),
+          )
+          ..serviceChoices = () => const [
+            (id: 'local-test', name: '服务 A', isModel: false, isDefault: true),
+            (id: 'service-b', name: '服务 B', isModel: true, isDefault: false),
+          ];
+    addTearDown(session.dispose);
+    session.begin(sessionId: 'retained-service-a', text: 'Hello');
+    await pumpCard(tester, session);
+    await tester.tap(find.text('服务 A'));
+    await tester.pumpAndSettle();
+    expect(find.text('服务 B'), findsOneWidget);
+    await tester.tapAt(Offset.zero);
+    await tester.pumpAndSettle();
+
+    // 已提交选项由设置持有者赋值；通知应直接刷新现有卡片，无需重新装载窗口。
+    session.serviceChoices = () => const [
+      (id: 'local-test', name: '服务 A', isModel: false, isDefault: true),
+    ];
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('服务 A'));
+    await tester.pumpAndSettle();
+    expect(find.text('服务 B'), findsNothing);
+    expect(find.text('Hello'), findsOneWidget);
+    expect(find.text('你好'), findsOneWidget);
+    expect(session.sessionId, 'retained-service-a');
+    expect(session.snapshot.phase, TranslationPhase.completed);
+    expect(tester.takeException(), isNull);
+  });
 }

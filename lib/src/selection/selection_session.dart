@@ -84,8 +84,18 @@ class SelectionSession extends ChangeNotifier {
   TranslationProvider? Function(String serviceId, TextMode mode)
   serviceProviderFor = (_, _) => null;
 
-  /// 无参数；返回卡片服务菜单的全部服务，按已提交设置生成；未接入设置时与新装配置一致，只有默认的谷歌翻译（#100）。
-  List<ServiceChoice> Function() serviceChoices = () => const [
+  /// 无参数；返回生成已提交服务菜单的回调，其结果为有序服务选项列表（#100）。
+  List<ServiceChoice> Function() get serviceChoices => _serviceChoices;
+
+  /// value 为无参数且返回已提交服务列表的回调；替换后刷新卡片菜单，保留会话与结果，无返回值。
+  set serviceChoices(List<ServiceChoice> Function() value) {
+    _serviceChoices = value;
+    // 服务配置提交不改变当前翻译结果，但已有菜单必须同步删除或新增的选项。
+    notifyListeners();
+  }
+
+  /// 未接入设置时只有默认的谷歌翻译，回调由唯一设置持有者替换。
+  List<ServiceChoice> Function() _serviceChoices = () => const [
     (
       id: ServiceConfig.builtinId,
       name: ServiceConfig.builtinName,
@@ -117,6 +127,20 @@ class SelectionSession extends ChangeNotifier {
 
   /// 无参数；返回本会话实际服务，供成功历史使用。
   TranslationProvider get activeProvider => _activeProvider ?? provider;
+
+  /// serviceIds 为提交后仍存在的自定义服务 ID；当前展开会话依赖的服务被删除时取消并清空会话，
+  /// 返回需要关闭的原生会话 ID；内置服务或仍存在的服务返回 null。
+  String? dismissIfServiceRemoved(Set<String> serviceIds) {
+    if (!isExpanded) return null;
+    final selected = serviceOverride ?? activeProvider.id;
+    if (selected == ServiceConfig.builtinId || serviceIds.contains(selected)) {
+      return null;
+    }
+    final closedId = sessionId;
+    // dismiss 取消正在进行的请求并清空卡片；后续 begin 使用已提交的默认服务。
+    dismiss();
+    return closedId;
+  }
 
   /// 无参数；返回本会话冻结语言方向，供重试和成功历史使用。
   LanguageDirection get activeLanguage => _activeLanguage ?? language;
@@ -412,6 +436,7 @@ class SelectionSession extends ChangeNotifier {
     // 关闭会话即停止请求，迟到事件仍由 generation 拦截。
     _cancelTranslation();
     sessionId = null;
+    serviceOverride = null;
     snapshot = TranslationSnapshot.idle;
     notifyListeners();
   }

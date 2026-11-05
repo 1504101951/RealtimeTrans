@@ -6,13 +6,30 @@ import 'package:translate_app/src/selection/selection_session.dart';
 import 'package:translate_app/src/translation/language_direction.dart';
 import 'package:translate_app/src/translation/translation_types.dart';
 
+/// 用独立服务身份和受控输入流验证会话取消，不代替会话状态转换。
+class _StreamingProvider extends TranslationProvider {
+  /// id 为已提交服务身份，events 为本次请求实际消费的事件流。
+  _StreamingProvider(this.id, this.events);
+
+  @override
+  final String id;
+  final Stream<TranslationEvent> events;
+
+  /// request 为选区原文及语言方向；返回受控业务输入，不创建额外完成事件。
+  @override
+  Stream<TranslationEvent> translate(TranslationRequest request) => events;
+}
+
+/// 按给定事件完成翻译并保留请求内容，供会话输入输出验证使用。
 class RecordingProvider implements TranslationProvider {
+  /// id 为服务身份，events 为每次翻译的事件序列；构造可独立配置的测试服务。
   RecordingProvider({
+    this.id = 'recording',
     this.events = const [TranslationUpdate('你好'), TranslationCompleted()],
   });
 
   @override
-  final id = 'recording';
+  final String id;
   @override
   bool get usesSlidingContext => false;
   final List<TranslationEvent> events;
@@ -29,6 +46,87 @@ class RecordingProvider implements TranslationProvider {
 
 void main() {
   final language = LanguageDirection(primaryCode: 'zh-CN', secondaryCode: 'en');
+
+  for (final override in [false, true]) {
+    test(
+      '删除${override ? '卡片选中' : '当前激活'}服务取消展开会话，删除其他服务保留卡片，新请求使用已提交默认服务',
+      () async {
+        // 边界：旧服务在输出部分译文后保持连接，删除另一服务不能结束它；
+        // 默认配置已切换时，仍须依据旧卡片实际使用的身份关闭，新选区再采用新的默认服务。
+        final started = Completer<void>();
+        final released = Completer<void>();
+        final visible = Completer<void>();
+        final events = StreamController<TranslationEvent>(
+          onListen: started.complete,
+          onCancel: released.complete,
+        );
+        addTearDown(events.close);
+        final active = _StreamingProvider('selected-service', events.stream);
+        final next = RecordingProvider(
+          id: 'next-default',
+          events: const [TranslationUpdate('新的默认译文'), TranslationCompleted()],
+        );
+        final session = SelectionSession(
+          detectLanguage: (_) async => 'en',
+          provider: override ? RecordingProvider(id: 'old-default') : active,
+          language: language,
+        )..serviceProviderFor = (_, _) => active;
+        addTearDown(session.dispose);
+        session.addListener(() {
+          if (session.snapshot.translatedText == '部分译文' &&
+              !visible.isCompleted) {
+            visible.complete();
+          }
+        });
+        session.begin(sessionId: 'removed-service-card', text: 'Selected text');
+        final Future<void> pending;
+        if (override) {
+          await session.activate();
+          pending = session.switchService('selected-service');
+        } else {
+          pending = session.activate();
+        }
+        await started.future.timeout(const Duration(seconds: 1));
+        expect(
+          session.dismissIfServiceRemoved({'old-default', 'selected-service'}),
+          isNull,
+        );
+        events.add(const TranslationUpdate('部分译文'));
+        await visible.future.timeout(const Duration(seconds: 1));
+        expect(session.sessionId, 'removed-service-card');
+        expect(session.snapshot.phase, TranslationPhase.translating);
+        expect(session.isExpanded, isTrue);
+
+        session.provider = next;
+        expect(
+          session.dismissIfServiceRemoved({'next-default'}),
+          'removed-service-card',
+        );
+        await pending.timeout(const Duration(seconds: 1));
+        await released.future.timeout(const Duration(seconds: 1));
+        expect(events.hasListener, isFalse);
+        expect(session.sessionId, isNull);
+        expect(session.serviceOverride, isNull);
+        expect(session.snapshot.phase, TranslationPhase.idle);
+        expect(session.snapshot.sourceText, isEmpty);
+        expect(session.snapshot.translatedText, isEmpty);
+        expect(session.isExpanded, isFalse);
+        expect(session.canRetry, isFalse);
+
+        // 旧输入的迟到事件不能覆盖后续独立会话的完整业务结果。
+        events.add(const TranslationUpdate('旧译文'));
+        events.add(const TranslationCompleted());
+        session.begin(sessionId: 'next-default-card', text: 'New selection');
+        await session.activate();
+        expect(session.sessionId, 'next-default-card');
+        expect(session.snapshot.phase, TranslationPhase.completed);
+        expect(session.snapshot.translatedText, '新的默认译文');
+        expect(session.activeProvider.id, 'next-default');
+        expect(session.serviceOverride, isNull);
+      },
+    );
+  }
+
   test('输入翻译使用独立语言方向，其余入口使用全局方向（#99）', () async {
     // 边界：原文识别为英文；全局主要语言为中文时目标为中文，输入翻译主要语言为英文、次要为日文时目标为日文。
     final provider = RecordingProvider();
