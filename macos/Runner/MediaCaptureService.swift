@@ -467,6 +467,8 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
     /// 无参数；取消当前资源或丢弃预览，只清理本会话创建的私有目录。
     func cancel() async {
         let token = id
+        // 进入取消前是否已在停止；后续分支会改成 finalizing，不能据此判断录制流是否还要停止。
+        let alreadyStopping = [.pausing, .finalizing].contains(phase)
         if let recorder = applicationRecorder {
             // 先撤销可提交身份，正在等待编码的结束任务不能再次发布结果。
             applicationRecorder = nil
@@ -475,8 +477,10 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
             // 其他清理路径可能已完成并开放新采集；过期取消不能继续操作共享字段。
             guard id == token else { return }
         }
-        exportTask?.cancel()
         if let exportTask {
+            // 等待文件任务时保持不可操作，完成回调不能重新开放结果页并启动另一份保存。
+            update(.finalizing)
+            exportTask.cancel()
             await exportTask.value
             guard id == token else { return }
         }
@@ -488,7 +492,6 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
         }
         self.scrollTask = nil
         if let stream {
-            let alreadyStopping = [.pausing, .finalizing].contains(phase)
             discardRecording = true
             update(.finalizing)
             if !alreadyStopping {
@@ -506,7 +509,8 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
     }
 
     /// 无参数；释放计时器与本会话文件，保留用户的选区和已保存文件。
-    func clear() {
+    /// 文件任务运行期间只能经 cancel 进入；cancel 等待不可中断的暂存复制结束后才调用本方法。
+    private func clear() {
         stopWatchingScrollTakeover()
         autoScrollAvailable = false
         autoScrollActive = false
@@ -609,15 +613,25 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
             guard let self else { return }
             do {
                 let result = try await Self.joinRecordingSegments(segments, destination: destination)
-                try Task.checkCancellation()
-                let info = try await GIFExporter.metadata(result)
-                guard self.id == token else { return }
-                self.video = result
-                self.onActiveChanged?(false)
-                self.update(.videoReady, ["duration": info.duration, "width": info.width, "height": info.height])
+                // 校验完整媒体后交付结果，取消及过期会话都不能取得新的预览身份。
+                try await self.publishFinishedRecording(result, token: token)
             } catch is CancellationError { return }
             catch { if self.id == token { await self.fail(error) } }
         }
+    }
+
+    /// source 为已完成的本地 MP4，token 为产生该文件的会话身份；解码校验后公开视频结果，无返回值。
+    /// 校验期间取消或替换会话时不交付；文件仍由原有会话的临时目录管理。
+    func publishFinishedRecording(_ source: URL, token: String) async throws {
+        try Task.checkCancellation()
+        guard id == token else { return }
+        // metadata 验证视频首帧并读取真实尺寸与时长，不交付损坏的录制。
+        let info = try await GIFExporter.metadata(source)
+        try Task.checkCancellation()
+        guard id == token else { return }
+        video = source
+        onActiveChanged?(false)
+        update(.videoReady, ["duration": info.duration, "width": info.width, "height": info.height])
     }
 
     /// sources为同一目标按时间排序的无音轨MP4段，destination为会话私有输出；返回可供校验的连续视频路径。
@@ -956,17 +970,17 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
         trim = range
     }
 
-    /// target为分类日期目录内的默认路径；未裁剪时直接发布源MP4，裁剪后在后台重新编码所选区间。
+    /// target为分类日期目录内的默认路径；后台保存完整MP4或重新编码裁剪区间。
     /// 发布时防覆盖，公开实际保存路径并保留预览。
     func saveVideo(to target: URL) throws {
         let source = try recordingURL()
         guard let trim else {
-            let saved = try ScreenshotStorage.publish(source: source, target: target)
-            update(.videoReady, ["savedPath": saved.path])
+            // 完整视频只经发布目录的一次暂存复制，不重新编码或生成另一份会话副本。
+            try convert(.mp4, source: source, to: target, pathKey: "savedPath")
             return
         }
         // trimVideo按区间重新编码到临时路径，转换流程负责进度、取消与发布。
-        try convert(.mp4, to: target, pathKey: "savedPath") { destination, progress in
+        try convert(.mp4, source: source, to: target, pathKey: "savedPath") { destination, progress in
             try await Self.trimVideo(source: source, range: trim, destination: destination, progress: progress)
         }
     }
@@ -996,7 +1010,7 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
     func exportAnimation(_ format: GIFExporter.Format, options: GIFExporter.Options, to target: URL) throws {
         let source = try recordingURL()
         let range = trim
-        try convert(format.kind, to: target, pathKey: format.pathKey) { destination, progress in
+        try convert(format.kind, source: source, to: target, pathKey: format.pathKey) { destination, progress in
             _ = try await GIFExporter.export(source: source, destination: destination, options: options,
                                              format: format, range: range, progress: progress)
         }
@@ -1007,46 +1021,58 @@ final class MediaCaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDe
     func exportWebM(to target: URL) throws {
         let source = try recordingURL()
         let range = trim
-        try convert(.webm, to: target, pathKey: "webmPath") { destination, progress in
+        try convert(.webm, source: source, to: target, pathKey: "webmPath") { destination, progress in
             // WebMExporter 把帧转为 BT.601 矩阵，经不挂窗口的 WebKit 编码 VP8 并写成 WebM。
             _ = try await WebMExporter.export(source: source, destination: destination, range: range, progress: progress)
         }
     }
 
-    /// kind为导出类型，target为分类日期路径，pathKey为成功后公开保存路径的详情键；
-    /// work在后台把结果写入给定临时路径并回报0–1进度。转换期间公开exporting与progress，结束后回到视频结果。
-    private func convert(_ kind: RecordingExport, to target: URL, pathKey: String,
-                         work: @escaping @Sendable (URL, @escaping @Sendable (Double) -> Void) async throws -> Void) throws {
+    /// kind为导出类型，source为只读源视频，target为分类日期路径，pathKey为成功后公开路径的详情键；
+    /// work非空时后台编码到临时路径并回报0–1进度；为空时直接暂存发布source，不报告百分比。无返回值。
+    private func convert(_ kind: RecordingExport, source: URL, to target: URL, pathKey: String,
+                         work: (@Sendable (URL, @escaping @Sendable (Double) -> Void) async throws -> Void)? = nil) throws {
         let token = id
-        guard let temporaryDirectory else { throw GIFExporter.ExportError(message: "录制会话已失效。") }
-        let destination = temporaryDirectory.appendingPathComponent("\(UUID().uuidString).\(kind.fileExtension)")
+        let destination: URL
+        if work != nil {
+            guard let temporaryDirectory else { throw GIFExporter.ExportError(message: "录制会话已失效。") }
+            destination = temporaryDirectory.appendingPathComponent("\(UUID().uuidString).\(kind.fileExtension)")
+        } else {
+            destination = source
+        }
         details.removeValue(forKey: "error")
-        update(.converting, ["progress": 0.0, "exporting": kind.rawValue])
+        details.removeValue(forKey: "progress")
+        var values: [String: Any] = ["exporting": kind.rawValue]
+        if work != nil { values["progress"] = 0.0 }
+        update(.converting, values)
         exportTask = Task.detached { [weak self] in
             guard let self else { return }
-            defer { try? FileManager.default.removeItem(at: destination) }
+            // 只删除本次编码创建的临时文件；直接保存时源录制始终只读。
+            defer { if work != nil { try? FileManager.default.removeItem(at: destination) } }
             let outcome: (key: String, value: String)
             do {
-                try await work(destination) { progress in
-                    DispatchQueue.main.async {
-                        guard self.id == token, self.phase == .converting else { return }
-                        self.update(.converting, ["progress": progress])
+                if let work {
+                    try await work(destination) { progress in
+                        DispatchQueue.main.async {
+                            guard self.id == token, self.phase == .converting else { return }
+                            self.update(.converting, ["progress": progress])
+                        }
                     }
                 }
                 try Task.checkCancellation()
                 outcome = (pathKey, try ScreenshotStorage.publish(source: destination, target: target).path)
             } catch {
-                outcome = ("error", error is CancellationError ? "转换已取消，源视频保持不变。" : error.localizedDescription)
+                let cancelled = work == nil ? "保存已取消，源视频保持不变。" : "转换已取消，源视频保持不变。"
+                outcome = ("error", error is CancellationError ? cancelled : error.localizedDescription)
             }
             // 成功与失败都结束转换：撤下exporting，再公开保存路径或原因。
             await MainActor.run {
-                guard self.id == token else { return }
+                guard self.id == token, self.phase == .converting else { return }
                 self.details.removeValue(forKey: "exporting")
                 self.update(.videoReady, [outcome.key: outcome.value])
             }
         }
     }
 
-    /// 无参数；取消正在进行的MP4/GIF/APNG/WebM转换，保持当前MP4和已保存文件。
+    /// 无参数；取消正在进行的视频保存或MP4/GIF/APNG/WebM转换，保持当前MP4和已保存文件。
     func cancelExport() { exportTask?.cancel() }
 }

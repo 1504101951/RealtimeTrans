@@ -261,6 +261,8 @@ class _CaptureAppState extends State<CaptureApp> {
     );
     final logical = pixels / (_state['previewScale'] as num).toDouble();
     final converting = _phase == CapturePhase.converting;
+    // 文件复制没有可测量的编码进度；缺少 progress 的忙碌快照只显示保存状态。
+    final saving = converting && _state['progress'] == null;
     final enabled = !_pending && !converting;
     // 转换中的导出类型；只有该类型的按钮变为取消，其余导出按钮禁用。
     final exporting = converting
@@ -308,7 +310,7 @@ class _CaptureAppState extends State<CaptureApp> {
       for (final (kind, label, icon, method) in exports)
         kind == exporting
             ? (
-                '取消转换',
+                saving ? '取消保存' : '取消转换',
                 Icons.cancel_outlined,
                 _pending
                     ? null
@@ -396,7 +398,9 @@ class _CaptureAppState extends State<CaptureApp> {
                 toolbar: toolbar,
                 message:
                     _feedback ??
-                    '正在转换 ${(((_state['progress'] as num?)?.toDouble() ?? 0) * 100).round()}%',
+                    (saving
+                        ? '正在保存…'
+                        : '正在转换 ${((_state['progress'] as num).toDouble() * 100).round()}%'),
                 isError: _feedback != null && _feedbackIsError,
               ),
           ],

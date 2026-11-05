@@ -873,6 +873,130 @@ final class CaptureMediaTests: XCTestCase {
         XCTAssertEqual(writer.status, .completed, writer.error?.localizedDescription ?? "")
     }
 
+    /// 无参数；完整视频保存立即进入忙碌状态，真实文件发布保持全部字节，写盘失败保留预览且可重试。
+    /// 边界：重复保存必须拒绝；实际不存在的目标目录触发失败；已有同名文件不覆盖，输出仍可解码。
+    @MainActor
+    func testUntrimmedVideoSavePublishesInBackgroundAndRecoversFromFileFailure() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("CaptureSave-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source.mp4")
+        // writeMovie 生成真实的一秒视频；逐字节相同证明未裁剪保存没有重新编码。
+        try await writeMovie(source)
+        let bytes = try Data(contentsOf: source)
+        let service = MediaCaptureService()
+        // publishFinishedRecording 使用生产完成入口校验源视频，不启动屏幕采集或申请权限。
+        try await service.publishFinishedRecording(source, token: service.id)
+        let target = directory.appendingPathComponent("saved.mp4")
+        try Data([9]).write(to: target)
+        let saved = expectation(description: "后台完整视频保存完成")
+        service.onChange = { state in
+            if state["phase"] as? String == CapturePhase.videoReady.rawValue { saved.fulfill() }
+        }
+        try service.saveVideo(to: target)
+        XCTAssertEqual(service.phase, .converting)
+        XCTAssertTrue(service.isBusy)
+        XCTAssertNil(service.snapshot()["progress"])
+        XCTAssertEqual(service.snapshot()["exporting"] as? String, RecordingExport.mp4.rawValue)
+        XCTAssertThrowsError(try service.saveVideo(to: directory.appendingPathComponent("duplicate.mp4")))
+        await fulfillment(of: [saved], timeout: 5)
+        service.onChange = nil
+        let published = URL(fileURLWithPath: try XCTUnwrap(service.snapshot()["savedPath"] as? String))
+        XCTAssertEqual(published.lastPathComponent, "saved-2.mp4")
+        XCTAssertEqual(try Data(contentsOf: published), bytes)
+        XCTAssertEqual(try Data(contentsOf: target), Data([9]))
+        XCTAssertEqual(try Data(contentsOf: source), bytes)
+        // metadata 验证发布文件真实可解码，不以路径存在代替有效输出。
+        let info = try await GIFExporter.metadata(published)
+        XCTAssertEqual(info.duration, 1, accuracy: 0.04)
+        XCTAssertFalse(service.isBusy)
+
+        let failed = expectation(description: "真实写盘失败返回视频结果")
+        service.onChange = { state in
+            if state["phase"] as? String == CapturePhase.videoReady.rawValue { failed.fulfill() }
+        }
+        try service.saveVideo(to: directory.appendingPathComponent("missing/output.mp4"))
+        await fulfillment(of: [failed], timeout: 5)
+        service.onChange = nil
+        XCTAssertEqual(service.phase, .videoReady)
+        XCTAssertNotNil(service.snapshot()["error"])
+        XCTAssertEqual(try service.recordingURL(), source)
+        XCTAssertEqual(try Data(contentsOf: published), bytes)
+
+        let retried = expectation(description: "失败后可重新保存")
+        service.onChange = { state in
+            if state["phase"] as? String == CapturePhase.videoReady.rawValue { retried.fulfill() }
+        }
+        let retry = directory.appendingPathComponent("retry.mp4")
+        try service.saveVideo(to: retry)
+        await fulfillment(of: [retried], timeout: 5)
+        service.onChange = nil
+        XCTAssertNil(service.snapshot()["error"])
+        XCTAssertEqual(try Data(contentsOf: retry), bytes)
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: directory.path).contains { $0.hasSuffix(".partial") })
+        await service.cancel()
+        XCTAssertEqual(try Data(contentsOf: retry), bytes)
+    }
+
+    /// 无参数；保存中的取消和关闭等待真实文件任务结束，已经发布的文件保留，旧录制完成事件不污染新会话。
+    /// 边界：取消可能发生在原子发布之前或之后；前者没有输出，后者完整保留，均无暂存残留且源视频不变。
+    @MainActor
+    func testVideoSaveCancelAndCloseKeepCommittedFilesAndRejectStaleRecording() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("CaptureSaveCancel-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source.mp4")
+        // writeMovie 创建不依赖屏幕权限的真实录制，外部夹具目录由测试持有。
+        try await writeMovie(source)
+        let bytes = try Data(contentsOf: source)
+        let service = MediaCaptureService()
+        // publishFinishedRecording 与实际分段合并后的交付使用相同的解码与身份校验。
+        try await service.publishFinishedRecording(source, token: service.id)
+        let cancelled = expectation(description: "取消保存回到源视频结果")
+        service.onChange = { state in
+            if state["phase"] as? String == CapturePhase.videoReady.rawValue { cancelled.fulfill() }
+        }
+        let target = directory.appendingPathComponent("cancelled.mp4")
+        try service.saveVideo(to: target)
+        service.cancelExport()
+        await fulfillment(of: [cancelled], timeout: 5)
+        service.onChange = nil
+        XCTAssertEqual(try service.recordingURL(), source)
+        if FileManager.default.fileExists(atPath: target.path) {
+            XCTAssertEqual(try Data(contentsOf: target), bytes)
+        } else {
+            XCTAssertEqual(service.snapshot()["error"] as? String, "保存已取消，源视频保持不变。")
+        }
+        let previousID = service.id
+        let closingTarget = directory.appendingPathComponent("closing.mp4")
+        var closingPhases: [String] = []
+        service.onChange = { state in
+            if let phase = state["phase"] as? String { closingPhases.append(phase) }
+        }
+        try service.saveVideo(to: closingTarget)
+        await service.cancel()
+        service.onChange = nil
+        // 关闭等待期间不能短暂回到可保存结果，防止清理前再启动另一个文件任务。
+        XCTAssertEqual(closingPhases, [CapturePhase.converting.rawValue, CapturePhase.finalizing.rawValue, CapturePhase.idle.rawValue])
+        XCTAssertEqual(service.phase, .idle)
+        XCTAssertNotEqual(service.id, previousID)
+        XCTAssertNil(service.snapshot()["savedPath"])
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: directory.path).contains { $0.hasSuffix(".partial") })
+        if FileManager.default.fileExists(atPath: closingTarget.path) {
+            XCTAssertEqual(try Data(contentsOf: closingTarget), bytes)
+        }
+        // 已结束会话的迟到交付不能把空闲会话变回结果页，也不能恢复旧保存路径。
+        try await service.publishFinishedRecording(source, token: previousID)
+        XCTAssertEqual(service.phase, .idle)
+        XCTAssertNil(service.snapshot()["savedPath"])
+        try await service.publishFinishedRecording(source, token: service.id)
+        XCTAssertEqual(service.phase, .videoReady)
+        XCTAssertNil(service.snapshot()["error"])
+        XCTAssertNil(service.snapshot()["savedPath"])
+        XCTAssertEqual(try Data(contentsOf: source), bytes)
+        await service.cancel()
+    }
+
     /// 无参数；两个1秒分段合并为2秒，跨接缝颜色顺序和源文件不变证明暂停没有占位画面。
     func testPausedRecordingSegmentsJoinWithoutTimeGap() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("CaptureSegments-\(UUID().uuidString)")

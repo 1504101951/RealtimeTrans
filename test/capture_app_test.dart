@@ -275,6 +275,66 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('MP4后台保存只显示保存状态，防重复且保留取消与关闭入口', (tester) async {
+    // 边界：完整 MP4 的复制没有编码进度；忙碌快照缺少 progress，不能显示 0% 或其他虚构百分比。
+    // 返回结果页后可再次保存；取消保存保留源视频，关闭保存中的结果结束当前会话。
+    state = {
+      'id': 'saving-video',
+      'phase': 'videoReady',
+      'previewScale': 1.0,
+      'duration': 1.0,
+      'width': 640,
+      'height': 480,
+    };
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == MethodNames.saveRecording) {
+        state = {...state, 'phase': 'converting', 'exporting': 'mp4'};
+      }
+      if (call.method == MethodNames.cancelRecordingExport) {
+        state = {...state, 'phase': 'videoReady', 'error': '保存已取消，源视频保持不变。'};
+      }
+      if (call.method == MethodNames.cancelCapture) {
+        state = {'id': 'after-saving', 'phase': 'idle'};
+      }
+      return state;
+    });
+    await tester.pumpWidget(const CaptureApp(channel: channel));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('保存 MP4'));
+    await tester.pumpAndSettle();
+    expect(find.text('正在保存…'), findsOneWidget);
+    expect(find.textContaining('%'), findsNothing);
+    expect(find.byTooltip('保存 MP4'), findsNothing);
+    final buttons = {
+      for (final button in tester.widgetList<IconButton>(
+        find.byType(IconButton),
+      ))
+        button.tooltip!: button,
+    };
+    for (final label in ['播放视频', '裁剪', '导出 GIF', '导出 APNG', '导出 WebM']) {
+      expect(buttons[label]!.onPressed, isNull);
+    }
+    expect(buttons['关闭当前采集']!.onPressed, isNotNull);
+    await tester.tap(find.byTooltip('取消保存'));
+    await tester.pump();
+    expect(find.text('保存已取消，源视频保持不变。'), findsOneWidget);
+    expect(
+      tester
+          .widgetList<IconButton>(find.byType(IconButton))
+          .firstWhere((button) => button.tooltip == '保存 MP4')
+          .onPressed,
+      isNotNull,
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.byTooltip('保存 MP4'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('关闭当前采集'));
+    await tester.pumpAndSettle();
+    expect(find.byType(IconButton), findsNothing);
+    expect(find.text('正在保存…'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('GIF直接导出全视频，取消和保存反馈在工具栏外仅停留一秒', (tester) async {
     // 非整数源时长由原生元数据决定；结果页不要求用户输入尺寸和片段。
     state = {
@@ -1111,4 +1171,3 @@ Future<Uint8List> _selectionImage({int width = 320, int height = 240}) async {
   picture.dispose();
   return data!.buffer.asUint8List();
 }
-
