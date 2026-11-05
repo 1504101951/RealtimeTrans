@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Darwin
+import NaturalLanguage
 import OSLog
 import ScreenCaptureKit
 import UniformTypeIdentifiers
@@ -79,6 +80,45 @@ enum AppPreferences {
     /// 无参数；返回 Flutter 侧保存的偏好字典，尚未保存时为空字典。
     static var current: [String: Any] {
         UserDefaults.standard.dictionary(forKey: AppConstants.preferencesKey) ?? [:]
+    }
+}
+
+/// 设备语言识别：短文本置信度低时在前几名里取用户语言，中文按字形判断简繁（#1）。
+enum LanguageDetection {
+    /// text 为待识别原文；返回语言码（如 en、zh-Hans），无法判断时为 nil。用户语言取自已保存的偏好。
+    static func detect(_ text: String) -> String? {
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(text)
+        let hypotheses = recognizer.languageHypotheses(withMaximum: AppConstants.languageDetectionCandidates)
+            .map { (code: $0.key.rawValue, confidence: $0.value) }
+        let preferences = AppPreferences.current
+        let preferred = AppConstants.userLanguageKeys.compactMap { preferences[$0] as? String }
+        return resolve(hypotheses: hypotheses, text: text, preferred: preferred)
+    }
+
+    /// hypotheses 为识别器的前几名（语言码与置信度），text 为原文，preferred 为用户设置的语言码（如 zh-CN、en）；
+    /// 返回语言码：首位置信度达标时取首位，否则取前几名中属于用户语言、置信度最高的一个，都没有时为 nil；
+    /// 结果为中文且原文按用户的中文字形转换后不变时，改为用户的简繁写法。
+    static func resolve(hypotheses: [(code: String, confidence: Double)], text: String, preferred: [String]) -> String? {
+        let bases = Set(preferred.compactMap { Locale.Language(identifier: $0).languageCode?.identifier })
+        let ranked = hypotheses.sorted { $0.confidence > $1.confidence }
+        guard let top = ranked.first else { return nil }
+        let chosen = top.confidence >= AppConstants.languageDetectionConfidence
+            ? top.code
+            : ranked.first { Locale.Language(identifier: $0.code).languageCode.map { bases.contains($0.identifier) } == true }?.code
+        guard let chosen, Locale.Language(identifier: chosen).languageCode?.identifier == "zh" else { return chosen }
+        // 简繁共用的字形无法区分写法；原文转换到用户的写法后不变，说明没有另一写法独有的字。
+        guard let script = preferred.lazy.compactMap(chineseScript).first else { return chosen }
+        let transform = StringTransform(script == "Hans" ? "Hant-Hans" : "Hans-Hant")
+        return text.applyingTransform(transform, reverse: false) == text ? "zh-\(script)" : chosen
+    }
+
+    /// code 为用户语言码；返回中文对应的字形（Hans 或 Hant），非中文为 nil。
+    private static func chineseScript(_ code: String) -> String? {
+        let language = Locale.Language(identifier: code)
+        guard language.languageCode?.identifier == "zh" else { return nil }
+        // zh-TW、zh-HK 等地区码补全后为繁体。
+        return language.maximalIdentifier.contains("Hant") ? "Hant" : "Hans"
     }
 }
 

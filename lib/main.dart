@@ -93,7 +93,15 @@ Future<void> _startApplication(MacosPlatformBridge bridge) async {
     initial: initial,
     platform: bridge,
     onSaved: (candidate) {
-      // dismiss只撤下未展开触发态；已开始翻译继续使用自身冻结的服务和语言快照。
+      // dismissIfServiceRemoved 从会话源头取消已删除服务的请求，保留其他服务的展开结果。
+      final closedId = session.dismissIfServiceRemoved({
+        for (final service in candidate.services) service.id,
+      });
+      if (closedId != null) {
+        unawaited(bridge.stopSpeech());
+        unawaited(bridge.hideOverlay(sessionId: closedId));
+      }
+      // 普通设置提交只撤下未展开触发态；保留会话继续使用冻结的服务和语言快照。
       if (!session.isExpanded) session.dismiss();
       session.language = candidate.direction;
       // 输入翻译的语言方向与全局翻译隔离，同样只影响下一次翻译（#99）。
@@ -102,6 +110,8 @@ Future<void> _startApplication(MacosPlatformBridge bridge) async {
       session.provider = providerForSettings(candidate, bridge);
       // 输入翻译服务不使用双语段落对照，同样只影响下一次翻译。
       session.inputProvider = providerForInput(candidate, bridge);
+      // 菜单使用本次提交快照并通知保留卡片，避免已删除的其他服务仍可选择。
+      session.serviceChoices = () => serviceChoices(candidate);
       // 实时翻译之后发送的批次使用新配置，不重译画面上未变化的段落块。
       live.noteSettings(candidate);
     },
@@ -114,6 +124,9 @@ Future<void> _startApplication(MacosPlatformBridge bridge) async {
       ? providerForService(settings.current, bridge, serviceId)
       : assistProviderForService(settings.current, bridge, mode, serviceId);
   session.serviceChoices = () => serviceChoices(settings.current);
+
+  // 唯一截图编辑器对应一份可取消翻译；捕获 ID 防止旧窗口的结束事件取消新任务。
+  ({String id, Completer<void> cancellation})? screenshotRequest;
 
   // handleApplicationRequests只路由跨引擎请求；同引擎直接调用所属模块，不绕回原生通道。
   bridge.handleApplicationRequests((call) async {
@@ -129,6 +142,11 @@ Future<void> _startApplication(MacosPlatformBridge bridge) async {
       case MethodNames.historyPage:
       case MethodNames.historyRecording:
       case MethodNames.setHistoryRecording:
+      case MethodNames.historySources:
+      case MethodNames.historyRetention:
+      case MethodNames.setHistoryRetention:
+      case MethodNames.deleteHistory:
+      case MethodNames.clearHistory:
         // handleHistoryRequest访问同一个历史库，不等待设置提交或服务测试。
         return handleHistoryRequest(history, call);
       case MethodNames.vocabularyList:
@@ -193,22 +211,45 @@ Future<void> _startApplication(MacosPlatformBridge bridge) async {
           ),
         );
         return null;
+      case MethodNames.cancelScreenshotTranslation:
+        final map = Map<Object?, Object?>.from(call.arguments as Map);
+        final request = screenshotRequest;
+        if (request != null && request.id == map['id']) {
+          if (!request.cancellation.isCompleted) {
+            request.cancellation.complete();
+          }
+          screenshotRequest = null;
+        }
+        return null;
       case MethodNames.translatePlainText:
         final map = Map<Object?, Object?>.from(call.arguments as Map);
         final captureId = map['id'] as String;
+        final previous = screenshotRequest?.cancellation;
+        if (previous != null && !previous.isCompleted) previous.complete();
+        final cancellation = Completer<void>();
+        screenshotRequest = (id: captureId, cancellation: cancellation);
         // providerForSettings冻结本次截图翻译配置，设置后续修改不影响当前请求。
         final configuration = settings.current;
         final provider = providerForSettings(configuration, bridge);
         // translateScreenshotText校验截图身份，只在完整成功且仍有效时写入历史。
-        return translateScreenshotText(
-          text: map['text'] as String,
-          provider: provider,
-          model: translationHistoryModel(provider),
-          language: configuration.direction,
-          detectLanguage: bridge.detectLanguage,
-          isCurrent: () => bridge.isCurrentScreenshot(captureId),
-          history: history,
-        );
+        try {
+          return await translateScreenshotText(
+            text: map['text'] as String,
+            provider: provider,
+            model: translationHistoryModel(provider),
+            language: configuration.direction,
+            detectLanguage: bridge.detectLanguage,
+            isCurrent: () => bridge.isCurrentScreenshot(captureId),
+            cancelled: cancellation.future,
+            history: history,
+          );
+        } finally {
+          // 释放完成任务的取消等待；旧请求不能清空随后开始的新任务。
+          if (!cancellation.isCompleted) cancellation.complete();
+          if (identical(screenshotRequest?.cancellation, cancellation)) {
+            screenshotRequest = null;
+          }
+        }
       default:
         throw MissingPluginException('未知应用操作：${call.method}');
     }

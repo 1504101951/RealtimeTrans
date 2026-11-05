@@ -193,11 +193,14 @@ final class InputStatusBubble {
     func showFailure(_ message: String, anchor: InputAnchor) {
         close()
         let padding = AppConstants.scrollHintPadding
-        // hintTextSize/hintText 与长截图提示共用文字排版：13/18、最大宽 240pt 换行。
-        let textSize = CaptureShadeView.hintTextSize(message, width: AppConstants.scrollHintMaxWidth - padding.width * 2)
-        let size = NSSize(width: textSize.width + padding.width * 2, height: textSize.height + padding.height * 2)
+        // hintText 与长截图提示共用文字排版：13/18、最大宽 240pt 换行。
         let label = NSTextField(wrappingLabelWithString: message)
         label.attributedStringValue = CaptureShadeView.hintText(message, isError: true)
+        // 用实际绘制文字的控件测量，计入文字框内边距，末尾文字不会被换到不可见的第二行。
+        label.preferredMaxLayoutWidth = AppConstants.scrollHintMaxWidth - padding.width * 2
+        let fitting = label.fittingSize
+        let textSize = NSSize(width: ceil(fitting.width), height: ceil(fitting.height))
+        let size = NSSize(width: textSize.width + padding.width * 2, height: textSize.height + padding.height * 2)
         label.frame = NSRect(origin: NSPoint(x: padding.width, y: padding.height), size: textSize)
         let content = BubbleClickView(frame: NSRect(origin: .zero, size: size))
         content.onClick = { [weak self] in self?.close() }

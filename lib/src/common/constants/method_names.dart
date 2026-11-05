@@ -176,6 +176,21 @@ abstract final class MethodNames {
 
   static const setHistoryRecording = 'setHistoryRecording';
 
+  /// 返回翻译历史的来源名称列表，供筛选使用。
+  static const historySources = 'historySources';
+
+  /// 返回保留天数、确认状态及过期数量；可选 days 用于预览期限清理。
+  static const historyRetention = 'historyRetention';
+
+  /// 用户确认后设置保留天数并清理；参数 days，0 表示永久。
+  static const setHistoryRetention = 'setHistoryRetention';
+
+  /// 删除指定翻译记录；参数 id，不影响生词本与截图历史。
+  static const deleteHistory = 'deleteHistory';
+
+  /// 用户确认后清空全部翻译历史，不受当前筛选条件限制。
+  static const clearHistory = 'clearHistory';
+
   static const setOverlaySize = 'setOverlaySize';
 
   static const showOverlay = 'showOverlay';
@@ -233,6 +248,9 @@ abstract final class MethodNames {
   /// 经系统保存面板保存文本文件；参数 text 与 suggestedName，返回保存路径，取消为 null。
   static const saveTextFile = 'saveTextFile';
 
+  /// 系统面板读取术语 CSV/JSON；返回 name、format、text，取消为 null。
+  static const openGlossaryFile = 'openGlossaryFile';
+
   /// 朗读或停止朗读卡片一栏文字；参数含 text 与 language，返回调用后是否在朗读。
   static const toggleSpeech = 'toggleSpeech';
 
@@ -253,6 +271,9 @@ abstract final class MethodNames {
   static const toggleAutomatic = 'toggleAutomatic';
 
   static const translatePlainText = 'translatePlainText';
+
+  /// 原生截图关闭或替换时取消对应翻译；参数 id 为捕获身份。
+  static const cancelScreenshotTranslation = 'cancelScreenshotTranslation';
 
   static const undoPressed = 'undoPressed';
 }

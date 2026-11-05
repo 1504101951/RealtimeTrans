@@ -51,7 +51,7 @@ flowchart TD
 - 选区、失效事件和窗口命令携带 sessionId。系统设置命令不属于选区会话，使用独立方法和设置修订号。
 - 「仅使用快捷键」开启表示 automatic=false；菜单与表单均反向显示底层自动捕获状态。自动捕获关闭时保留 Escape、外部点击和前台变化监听，使快捷键产生的会话仍能正常关闭。此时鼠标拖动、鼠标抬起与非 Escape 的按键按下在监听回调中直接丢弃，不切到主线程。`SelectionMonitor.start` 把系统级辅助功能消息超时设为 `AppConstants.axMessagingTimeout`（1 秒），来源应用无响应时单次辅助功能调用最多等待 1 秒；输入翻译查找粘贴目标另有 `inputTargetSearchTimeout`（1 秒）总时长上限。
 - 全局热键使用 RegisterEventHotKey；翻译、输入翻译与截图三个用途按 `GlobalHotKey` 表在同一事务注册，同一组合不重复注册，新组合注册成功后才释放旧组合。
-- 输入翻译快捷键以 `inputHotkey` 手势进入与全局翻译快捷键相同的会话，但不显示浮层，且 `begin(input: true)` 使会话按 `inputLanguage`（`AppSettings.inputDirection`，偏好 `inputPrimaryLanguage`、`inputSecondaryLanguage`，未设置时复制全局语言）冻结语言方向：读不到选区时在非安全文本输入框内先发送 ⌘A；读取完成时 `AccessibilitySelection.inputAnchor` 按持有选区的节点（读取原文时返回的 `selection.element`，走复制兜底而未知时取焦点元素）依次取文本标记范围矩形（`AXSelectedTextMarkerRange`→`AXBoundsForTextMarkerRange`）、字符范围矩形（`AXSelectedTextRange`→`AXBoundsForRange`）、节点自身矩形，再退到焦点元素矩形或鼠标位置作为锚点，并取来源应用 `AXFocusedWindow` 的矩形，二者组成 `InputAnchor` 保存在 `MacPlatformBridge` 当前会话。完整成功后 Dart 调用 `replaceSelection`，Swift 核对会话、来源前台与安全输入，再由 `AccessibilitySelection.focusWritableInput` 确定粘贴目标（焦点已是值可写的非安全文本输入控件时直接使用；否则在来源 `AXFocusedWindow` 内广度优先查找，最多 `inputTargetSearchMaxNodes` 个节点、深度 `inputTargetSearchMaxDepth`，恰好一个时设 `AXFocused` 并等待 `inputTargetFocusDelay`，0 个或多个返回「没有可写入的输入框」），之后经剪贴板粘贴，`AppConstants.pasteRestoreDelay` 后在剪贴板未被改写时还原；返回 null 为已替换，字符串为未替换原因。翻译失败或未替换时 Dart 调用 `showInputFailure`，由 `InputStatusBubble` 在锚点下方 8pt（放不下放上方，上下都放不下贴可用区域底部，左边与锚点对齐）显示 2.5 秒，可用区域为锚点所在屏可见区与来源窗口矩形的交集（无窗口或交集为空时为可见区）。`InputStatusBubble` 同时承载「翻译中…」进行中浮标：读取原文发出选区事件后 300ms 仍未结束才显示，使用同一个非激活面板与位置规则并忽略鼠标事件；`replaceSelection` 通过校验后、失败气泡出现时、会话失效或结束（`hideOverlay`）以及新的输入翻译开始时收起，会话结束不会关闭已显示的失败气泡。
+- 输入翻译快捷键以 `inputHotkey` 手势进入与全局翻译快捷键相同的会话，但不显示浮层，且 `begin(input: true)` 使会话按 `inputLanguage`（`AppSettings.inputDirection`，偏好 `inputPrimaryLanguage`、`inputSecondaryLanguage`，未设置时复制全局语言）冻结语言方向：读不到选区时在非安全文本输入框内先发送 ⌘A；读取完成时 `AccessibilitySelection.inputAnchor` 按持有选区的节点（读取原文时返回的 `selection.element`，走复制兜底而未知时取焦点元素）依次取文本标记范围矩形（`AXSelectedTextMarkerRange`→`AXBoundsForTextMarkerRange`）、字符范围矩形（`AXSelectedTextRange`→`AXBoundsForRange`）、节点自身矩形，再退到焦点元素矩形或鼠标位置作为锚点，并取来源应用 `AXFocusedWindow` 的矩形，二者组成 `InputAnchor` 保存在 `MacPlatformBridge` 当前会话。完整成功后 Dart 调用 `replaceSelection`，Swift 核对会话、来源前台与安全输入，再由 `AccessibilitySelection.focusWritableInput` 确定粘贴目标（来源不提供焦点、焦点为非安全文本输入控件，或读取原文时持有选区的节点（`inputSelection`）就是焦点控件时直接使用；否则在来源 `AXFocusedWindow` 内广度优先查找，最多 `inputTargetSearchMaxNodes` 个节点、深度 `inputTargetSearchMaxDepth`，恰好一个时设 `AXFocused` 并等待 `inputTargetFocusDelay`，0 个或多个返回「没有可写入的输入框」），之后经剪贴板粘贴，`AppConstants.pasteRestoreDelay` 后在剪贴板未被改写时还原；返回 null 为已替换，字符串为未替换原因。翻译失败或未替换时 Dart 调用 `showInputFailure`，由 `InputStatusBubble` 在锚点下方 8pt（放不下放上方，上下都放不下贴可用区域底部，左边与锚点对齐）显示 2.5 秒，可用区域为锚点所在屏可见区与来源窗口矩形的交集（无窗口或交集为空时为可见区）。`InputStatusBubble` 同时承载「翻译中…」进行中浮标：读取原文发出选区事件后 300ms 仍未结束才显示，使用同一个非激活面板与位置规则并忽略鼠标事件；`replaceSelection` 通过校验后、失败气泡出现时、会话失效或结束（`hideOverlay`）以及新的输入翻译开始时收起，会话结束不会关闭已显示的失败气泡。
 
 ## 服务与凭据
 
@@ -63,7 +63,7 @@ AX 读取优先使用文本标记范围获取跨节点选区，再读取普通�
 
 选区文本与截图 OCR 文本都使用现有 `TranslationRequest` 进入翻译层，由各入口管理采集与启停；翻译层不接收图片或录屏文件。
 
-- 主 Dart 引擎串行处理设置保存、菜单修改和示例连接测试；修订号阻止过期表单覆盖。设置保存不关闭已展开卡片，已激活请求固定使用激活时的 Provider 和语言方向，更新供下一次翻译使用。
+- 主 Dart 引擎串行处理设置保存、菜单修改和示例连接测试；修订号阻止过期表单覆盖。删除展开卡片正在使用的服务时，主引擎通过 `SelectionSession.dismissIfServiceRemoved` 结束会话、取消请求并关闭原生卡片；其他设置保存保留卡片。保留的请求固定使用激活时的 Provider 和语言方向，新翻译使用提交后的默认服务。
 - `ServiceConfig` 保存服务类型、名称、Base URL、模型、独立提示词及语义对照选项；凭据独立传给 Swift，按配置 ID 存入用户 Keychain。
 - 打开设置仅查询 Keychain 凭据存在状态，禁止查询触发授权 UI。保存普通配置不读取密钥；有凭据变更时 Swift 才读取对应账户的回滚快照。凭据、登录项与快捷键配置成功后才保存普通偏好；同一服务 ID 不可更换协议。
 - 默认服务支持非官方 Google、Google Cloud v2、百度通用翻译、OpenAI-compatible Chat Completions、DeepSeek、Anthropic Messages 与 Apple 系统翻译。协议、百度签名、SSE 解析均由 Dart 实现。各模式的提示词与思考开关在 `AppSettings.prompts`、`AppSettings.thinking`（偏好 `PreferenceKeys.prompts`、`PreferenceKeys.thinking`），全部模型服务共用，缺省提示词为 `defaultPrompts`、思考缺省关闭；`ApiTranslationProvider` 由构造参数接收本模式的 `prompt` 与 `thinking`。DeepSeek 类型及官方域名按开关发送 `thinking.type=enabled/disabled`，Anthropic 开启时发送 `thinking`（`budget_tokens` 为 `NetworkLimits.anthropicThinkingBudget`，最大输出不大于预算时连接前报错），OpenAI 官方与其他兼容端点不发送思考参数；段落模式另向 DeepSeek 发送 `response_format.type=json_object`。
@@ -88,6 +88,12 @@ AX 读取优先使用文本标记范围获取跨节点选区，再读取普通�
 
 ## 翻译历史实现
 
+术语文件由 `glossary_file.dart` 解析为预览行并按既有术语键合并，CSV 与 JSON 使用同一字段契约。原生桥负责文件选择与保存；确认导入后通过设置页的串行事务提交，失败仅在预览中保留文件草稿和错误，取消不把未保存术语带入后续自动保存。
+
+文件与剪贴板图片经 `ScreenshotWindowController` 在后台解码为首帧、方向归正的 sRGB BGRA，复用截图引擎和编辑文档。普通图片窗口登记 `DockPresence`，关闭时撤销；图片不具有屏幕采集能力。主引擎按捕获 ID 持有截图翻译取消信号，原生关闭/替换先使旧身份失效并取消 Provider 流，完成后再次核对身份，阻止旧结果写入历史。
+
+`TranslationHistoryStore` 统一处理原文/译文关键词、来源、完成时间范围和稳定游标；日期由窗口按本地日历转换为左闭右开的毫秒范围。保留期限与确认状态存于 `history_meta`，默认 30 天，可选 90/365/永久；首次存在过期记录时等用户确认，确认后在启动、写入和设置期限时删除过期记录，列表与来源查询只按期限下界过滤、不写库；改期限时先按原期限删除，再应用新期限。期限提交与清理在同一事务中，单条删除及清空仅操作翻译历史。刷新/分页失败保留各自重试语义和可见记录。
+
 生词本 `VocabularyStore` 与翻译历史共用主引擎同一个 SQLite（`vocabulary` 表，单词不区分大小写唯一）。翻译模式下原文满足 `SelectionSession.isDictionaryTerm` 时，会话在翻译的同时经 `lookupDefinition` 调用 Swift `DCSCopyTextDefinition` 离线查询，释义到达后卡片右栏改为词典；`overlay/dictionary_definition.dart` 的 `parseDefinition` 按英汉词典与汉语词典的符号格式把纯文本拆成词条、词性、义项、例句行，未识别片段原样保留。历史窗口的生词本分段经 `vocabularyList`、`deleteVocabulary`、`vocabularyCsv` 请求主引擎，导出经 Swift `saveTextFile` 的系统保存面板写入；增删后与历史共用 `historyChanged` 通知刷新。
 
 截图历史 `ScreenshotHistoryStore` 同样由主引擎持有：元数据写入同一 SQLite 的 `screenshot_history` 表（`capture_id` 唯一，同一截图再次导出覆盖为最后一次），图片写入 Application Support 的 `ScreenshotHistory` 目录，先写临时文件再改名；「记录截图历史」开关保存在 `history_meta`，默认关闭。截图窗口每次导出只把合成 PNG 经 `copyScreenshot`、`saveScreenshot`（「复制并保存」携带 `copy: true`，保存成功后由 Swift 写剪贴板）或 `pinScreenshot` 交给 Swift 一次；`saveScreenshot` 与长截图保存在后台建目录、写文件，写完回到主线程再写剪贴板与记录历史。Swift 在导出成功后先经 `requestApplication` 向主引擎查询 `screenshotHistoryRecording` 开关（不带图片），开启时再发送 `recordScreenshotHistory`（id、bytes、capturedAt），关闭时整图不跨引擎；导出反馈与关闭不等待记录结果。每次写入后按 100 条、30 天清理，只删除历史目录内的文件；图片写入、改名与删除使用异步文件接口，记录、加入、删除与清空按请求到达顺序串行执行，同一截图连续导出仍以最后一次为准。历史窗口的截图历史分段经 `screenshotHistoryList`、`deleteScreenshotHistory`、`clearScreenshotHistory` 与开关请求主引擎；打开、复制图片、在 Finder 中显示由 Swift `openFile`、`copyImageFile`、`revealFile` 直接处理，文件不可读时复制返回 `copy_failed` 且不改剪贴板。变更同样经 `historyChanged` 通知刷新。拼接、拆分与比较（#109）由 Swift `ScreenshotComposer` 用 CoreGraphics 在后台队列按原始像素处理（沿用源图色彩空间、关闭插值），历史窗口经 `stitchScreenshots`、`splitScreenshot`、`compareScreenshots` 直接调用；结果经主引擎 `addScreenshotHistory` 加入历史，与导出记录共用写文件与清理逻辑但不检查记录开关，勾选状态只属于历史窗口页面。
@@ -98,6 +104,8 @@ AX 读取优先使用文本标记范围获取跨节点选区，再读取普通�
 
 ## 连续采集与本地媒体
 
+未裁剪 MP4 保存复用后台转换任务与 `ScreenshotStorage.publish`，只复制一次到临时文件后原子发布。复制不可中途打断，取消在发布前检查；关闭结果等待任务释放资源，成功发布的文件保留。主线程只管理忙碌状态，完成时验证采集身份与阶段。
+
 截图工具栏的“录制”“滚动长截图”默认挂在“截图”之下（`ScreenshotActions.defaultChildren`），通过截图通道交给 `CaptureWindowController`；路线与范围见 `docs/capture-roadmap.md`。录制目标与应用图标使用同工具栏动态行及独立按钮材料；开始按钮提交冻结帧身份、目标、选区像素坐标与录制延时，长截图携带冻结帧身份和像素坐标直接开始。录制延时（#129）由 `MediaCaptureService.startRecording` 在建立捕获流前以准备阶段倒计时，快照的 `countdown` 驱动控制条文案与 `StatusBarController.showCountdown` 的菜单栏图标；放弃或「停止采集」走准备阶段的取消路径，恢复同一截图草稿。截图工具栏「录制选项」经 `saveRecordingOptions` 进入主引擎设置队列，偏好 `recordingDelay` 与 `recordingShowsClicks` 随截图快照与工具栏变更通知回到截图引擎，保存成功后刷新设置页。`captureMain` 使用独立Flutter引擎呈现四个独立气泡控制条和视频结果，通过 `translateapp/capture` 交换实际状态。`MediaCaptureService` 在主执行器管理会话ID、ScreenCaptureKit流与临时目录；暂停、结束、放弃与恢复均校验真实阶段和会话。选区翻译与采集相互独立：只有截图取帧期间挂起选区监听并隐藏翻译浮层；录屏与长截图期间照常翻译。
 
 显示器、应用可见窗口与选区开始前重新校验。原生配置给出屏幕点坐标范围，`CaptureShadeView` 绘制穿透鼠标的实时边框和选区外阴影；采集与暂停都保持可见。控制气泡、选区外阴影、长截图预览、截图面板与跨屏目标预览以 `AppConstants.captureControlWindowIdentifier` 标记，`DisplayCapture.controlWindows` 按该标记取出（含隐藏窗口）：录屏（显示器、区域用 `SCContentFilter(display:excludingWindows:)`，应用录制包含所选应用与本应用）只排除这些窗口，翻译卡片、实时翻译盖层等本应用其余窗口和录制中新出现的窗口都进入画面；长截图排除本应用全部窗口。区域和全屏通过 `SCRecordingOutput` 写入同会话MP4分段；应用通过每屏仅包含所选应用的 `SCStream` 采集，由 `ApplicationRecorder` 将每屏最新帧按桌面位置合成到固定联合画布，以最高显示倍率编码，其他区域填黑；暂停完成当前段、恢复追加下一段，结束按顺序无间隙合并并验证解码后交付。区域与全屏录制按偏好 `recordingShowsClicks` 设置 `SCStreamConfiguration.showMouseClicks`。结果页裁剪由 `AVPlayerView.beginTrimming` 取得首尾时间，区间由 `MediaCaptureService` 持有并随会话清空。`GIFExporter` 按截图设置中的帧率与最大宽度、在裁剪区间（未裁剪为完整视频）内逐帧编码 GIF 或 APNG；裁剪后的 MP4 由 `AVAssetExportSession` 按区间重新编码。`WebMExporter` 用 `AVAssetReader` 按区间读取 NV12 帧，在后台经 `VTPixelTransferSession` 转为 BT.601 矩阵（VP8 码流只能按 BT.601 解释颜色），交给不挂窗口的 `WKWebView` 以 WebCodecs 编码 VP8，再由 `WebMWriter` 写成保持原分辨率与原帧时间的 WebM，输出帧数少于读入帧数时失败；编码会话与写文件在主线程，`WKWebView` 只在主线程创建与释放；隐藏页面在没有宿主请求时会被 WebKit 挂起，因此由宿主逐帧调用页面，帧经应用自定义 URL 协议交给页面，编码块以 base64 随返回值交回。四种导出共用同一后台转换流程，转换中快照的 `exporting` 为共享枚举 `RecordingExport`，`cancelRecordingExport` 统一取消。结果在完整可读后由`ScreenshotStorage`原子发布到截图根目录下的视频、gif、apng、webm 分类日期目录，PNG使用截图分类；重名追加序号，失败保留源媒体。
@@ -106,7 +114,7 @@ AX 读取优先使用文本标记范围获取跨节点选区，再读取普通�
 
 应用联合画布编码器将首个实际写入帧的时间固定为零，后续主机经过时间量化到 600 刻度，只写入严格递增的帧时间。首帧成功写入才确认录制就绪；无有效帧时结束明确失败，放弃直接取消写入。
 
-输入翻译通过系统日志 `subsystem=TranslateApp`、`category=Performance` 分段记录耗时（阶段名与毫秒，不含文本）：`input-read`（原生从开始采集到发出选区事件）、`input-first-token`（Dart 从发起翻译到首段非空译文）、`input-complete`（到翻译完整成功）、`input-replace`（`replaceSelection` 粘贴替换）；后三项由 `perfMark` 交原生写入。原生处理 `detectLanguage` 与 `readCredentials` 时另记 `translate-detect`（设备语言识别）与 `credentials-read`（钥匙串读取），所有翻译入口共用。
+输入翻译通过系统日志 `subsystem=TranslateApp`、`category=Performance` 分段记录耗时（阶段名与毫秒，不含文本）：`input-read`（原生从开始采集到发出选区事件）、`input-first-token`（Dart 从发起翻译到首段非空译文）、`input-complete`（到翻译完整成功）、`input-replace`（`replaceSelection` 粘贴替换）；后三项由 `perfMark` 交原生写入。原生处理 `detectLanguage` 与 `readCredentials` 时另记 `translate-detect`（设备语言识别）与 `credentials-read`（钥匙串读取），所有翻译入口共用。`LanguageDetection` 负责识别：首位置信度不足 0.5 时取前 3 名中的用户语言，中文按用户简繁写法做字形转换判断。
 
 录制启动通过系统日志 `subsystem=TranslateApp`、`category=CaptureStartup` 记录界面同步工作、来源配置、系统流资源创建、异步启动及实际开始写入的耗时；仅包含固定步骤名和毫秒时长，不包含截图、窗口标题或文件路径。
 
@@ -120,7 +128,7 @@ AX 读取优先使用文本标记范围获取跨节点选区，再读取普通�
 
 `ScreenshotWindowController.capture(_:)` 接收 `ScreenshotTarget`：指针所在屏以前台窗口为建议选区（只有该模式枚举窗口列表），指定显示器选中整屏并经快照 `cropSelected` 让 Dart 直接进入选中状态。`capture(_:)` 入口经 `CaptureWindowController.cancelCountdown` 结束未到时的录制倒计时，被替换的截图草稿不再恢复。冻结帧是否包含指针取偏好字典 `screenshotIncludesCursor`，`captureDisplayImage` 显式接收该选项，MCP 固定不含指针。
 
-区域框选时暂停文本手势采集并隐藏翻译浮层，完成后只恢复仍有效的浮层。截图的复制与保存不经过翻译层；“识别文字”“翻译文字”（`ScreenshotActions.ocrTranslate`，`_translateOcr`）经本地 OCR 取得文字后，由 `translateScreenshotText` 进入同一翻译层。
+截图取帧时暂停文本手势采集，翻译浮层保持显示并进入冻结帧；冻结编辑层显示期间（`onFrozenEditorVisibleChanged`）收起实时浮层，编辑层撤下或草稿结束后只恢复仍有效的浮层。截图的复制与保存不经过翻译层；“识别文字”“翻译文字”（`ScreenshotActions.ocrTranslate`，`_translateOcr`）经本地 OCR 取得文字后，由 `translateScreenshotText` 进入同一翻译层。
 
 ## MCP 截图接口
 

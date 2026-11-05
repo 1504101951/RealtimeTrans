@@ -19,7 +19,7 @@ macOS应用生命周期、系统能力与窗口控制器。
 15. [Release.entitlements](Release.entitlements)：声明发布构建所需的系统授权能力。
 16. [ScreenCaptureService.swift](ScreenCaptureService.swift)：通过系统屏幕捕获能力获取图像并执行设备OCR。
 17. [ScreenshotStorage.swift](ScreenshotStorage.swift)：统一采集根目录、分类日期路径与PNG/MP4/GIF/APNG/WebM防覆盖写入。
-18. [ScreenshotWindowController.swift](ScreenshotWindowController.swift)：管理截图窗口、捕获会话、键盘路由及原生导出操作。
+18. [ScreenshotWindowController.swift](ScreenshotWindowController.swift)：管理截图与导入图片窗口、可取消捕获会话、首帧 BGRA 解码、键盘路由及原生导出操作。
 19. [SelectionGestureDetector.swift](SelectionGestureDetector.swift)：识别鼠标和键盘产生的文本选区手势。
 20. [SelectionMonitor.swift](SelectionMonitor.swift)：监听全局选区变化并协调采集、热键和会话失效。
 21. [SettingsWindowController.swift](SettingsWindowController.swift)：管理设置Flutter窗口、配置转发和快捷键录制。

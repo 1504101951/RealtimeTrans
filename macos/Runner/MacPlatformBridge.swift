@@ -3,7 +3,6 @@ import Carbon
 import CoreServices
 import Security
 import LocalAuthentication
-import NaturalLanguage
 import ServiceManagement
 import FlutterMacOS
 
@@ -51,6 +50,8 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
     private var pendingAppReady = false
     /// 当前输入翻译会话的浮标与失败气泡锚点（AppKit 全局坐标），非输入翻译会话为 nil（#99）。
     private var inputAnchor: InputAnchor?
+    /// 输入翻译读取原文时持有选区的节点；复制兜底读取时为 nil。
+    private var inputSelection: AXUIElement?
     var closePermissionWizard: (() -> Void)?
     var shortcutRecorder: ((UInt32, UInt32) -> Void)?
     private var currentSessionId: String?
@@ -90,10 +91,12 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             self?.capture.prepareControls()
         }
         screenshot.onCapturingChanged = { [weak self] active in
-            guard let self else { return }
-            // 截图取帧期间挂起选区监听并隐藏翻译浮层，浮层不进入冻结帧；设置菜单仍可操作。
-            self.selectionMonitor.isCapturingScreenshot = active
-            self.overlay.setCaptureHidden(active)
+            // 截图取帧期间挂起选区监听；翻译浮层保持显示，随画面进入冻结帧。
+            self?.selectionMonitor.isCapturingScreenshot = active
+        }
+        screenshot.onFrozenEditorVisibleChanged = { [weak self] visible in
+            // 冻结编辑层显示期间收起实时浮层，避免叠在冻结画面里的卡片上；关闭后恢复。
+            self?.overlay.setCaptureHidden(visible)
         }
     }
 
@@ -215,7 +218,7 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             MainActor.assumeIsolated { InputStatusBubble.shared.closeProgress() }
             Task { @MainActor in
                 // focusWritableInput 确定粘贴目标：焦点不在输入框时聚焦来源窗口内唯一的可写入输入框，0 个或多个则不粘贴（#1）。
-                guard await AccessibilitySelection.focusWritableInput(sourcePID: pid) else {
+                guard await AccessibilitySelection.focusWritableInput(sourcePID: pid, selection: self.inputSelection) else {
                     result("没有可写入的输入框，未替换原文。"); return
                 }
                 // pasteReplacingSelection 经剪贴板粘贴，并在来源应用读取后还原原剪贴板。
@@ -346,10 +349,8 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             // 设备语言识别耗时写入性能日志，首次调用含模型加载（#68「性能测量边界」）。
             let detectStart = ContinuousClock.now
             defer { PerformanceLog.record("translate-detect", since: detectStart) }
-            let recognizer = NLLanguageRecognizer()
-            recognizer.processString(text)
-            let hypothesis = recognizer.languageHypotheses(withMaximum: 1).first
-            result(hypothesis.flatMap { $0.value >= 0.5 ? $0.key.rawValue : nil })
+            // LanguageDetection 在低置信度时取用户语言，中文按字形判断简繁。
+            result(LanguageDetection.detect(text))
         case AppConstants.openFileMethod, AppConstants.revealFileMethod, AppConstants.copyImageFileMethod:
             guard let path = args["path"] as? String else {
                 result(Self.badArguments("缺少文件路径。")); return
@@ -402,6 +403,28 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             // 词典服务使用「词典」App 已启用的词典离线查询；查不到返回 nil。
             let range = CFRange(location: 0, length: (text as NSString).length)
             result(DCSCopyTextDefinition(nil, text as CFString, range)?.takeRetainedValue() as String?)
+        case AppConstants.openGlossaryFileMethod:
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.commaSeparatedText, .json]
+            panel.allowsMultipleSelection = false
+            panel.prompt = "导入术语"
+            NSApp.activate(ignoringOtherApps: true)
+            panel.begin { response in
+                guard response == .OK, let url = panel.url else { result(nil); return }
+                // 文件读取放在后台，格式与业务校验由 Dart 的术语模块负责。
+                Task { @MainActor in
+                    do {
+                        let text = try await Task.detached { try String(contentsOf: url, encoding: .utf8) }.value
+                        result(["name": url.lastPathComponent, "format": url.pathExtension.lowercased(), "text": text])
+                    } catch let error as CocoaError where error.code == .fileReadInapplicableStringEncoding {
+                        // 其他编码的文件给出可操作的说明，不显示系统底层文案。
+                        result(FlutterError(code: AppConstants.settingsFailedError,
+                                            message: "术语文件须为 UTF-8 编码，请另存为 UTF-8 后再导入。", details: nil))
+                    } catch {
+                        result(FlutterError(code: AppConstants.settingsFailedError, message: error.localizedDescription, details: nil))
+                    }
+                }
+            }
         case AppConstants.saveTextFileMethod:
             guard let text = args["text"] as? String, let suggestedName = args["suggestedName"] as? String else {
                 result(Self.badArguments("saveTextFile 需要 text/suggestedName")); return
@@ -409,7 +432,8 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
             // 用户在保存面板选择位置，取消返回 nil；写入失败返回错误，不静默丢弃导出内容。
             let panel = NSSavePanel()
             panel.nameFieldStringValue = suggestedName
-            panel.allowedContentTypes = [.commaSeparatedText]
+            panel.allowedContentTypes = (suggestedName as NSString).pathExtension.lowercased() == "json"
+                ? [.json] : [.commaSeparatedText]
             NSApp.activate(ignoringOtherApps: true)
             panel.begin { response in
                 guard response == .OK, let url = panel.url else { result(nil); return }
@@ -724,7 +748,8 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
     }
 
     /// text 为选中文字，gesture 为手势，x/y 为屏幕锚点，sourcePID 为来源进程、sourceAppName为采集时冻结的应用名；发送新会话，无返回值。
-    func emitSelectionCaptured(text: String, gesture: String, x: CGFloat, y: CGFloat, sourcePID: pid_t, sourceAppName: String?, inputAnchor: InputAnchor? = nil) {
+    func emitSelectionCaptured(text: String, gesture: String, x: CGFloat, y: CGFloat, sourcePID: pid_t, sourceAppName: String?,
+                               inputAnchor: InputAnchor? = nil, inputSelection: AXUIElement? = nil) {
         guard !retainsResult || SelectionGesture(rawValue: gesture)?.isExplicit == true else { return }
         // 只有显式热键可以替换保留的结果；被动手势不打断阅读或正在进行的翻译。
         retainsResult = false
@@ -735,6 +760,8 @@ final class MacPlatformBridge: NSObject, FlutterStreamHandler {
         sourceProcessIdentifier = sourcePID
         // 输入翻译失败气泡的锚点属于本会话；其他手势为 nil（#99）。
         self.inputAnchor = inputAnchor
+        // 读取原文时持有选区的节点，用于判断粘贴目标（#1）。
+        self.inputSelection = inputSelection
         // 输入翻译读取完成后 300ms 仍未结束才显示进行中浮标；会话结束、替换或失败会取消或收起它（#67）。
         if let inputAnchor {
             MainActor.assumeIsolated { InputStatusBubble.shared.showProgress(anchor: inputAnchor) }

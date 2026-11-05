@@ -345,15 +345,21 @@ enum AccessibilitySelection {
         return AXValueGetValue(value as! AXValue, .cgRect, &rect) ? rect : nil
     }
 
-    /// sourcePID 为来源进程；确定输入翻译的粘贴目标：焦点已是可写入的文本输入控件时直接返回 true；
+    /// sourcePID 为来源进程，selection 为读取原文时持有选区的节点（复制兜底为 nil）；确定输入翻译的粘贴目标：
+    /// 来源不提供焦点、焦点为非安全的文本输入控件，或选区就在焦点控件上时直接返回 true（部分应用的输入框不报告值可写）；
     /// 否则（如在只读回复中选中文字）在来源应用当前窗口内查找可写入的文本输入控件，恰好一个时将焦点设到它上面，
     /// 等待 inputTargetFocusDelay 让来源应用完成聚焦后返回 true；找到 0 个、多个、遍历超时或无法聚焦时返回 false。
     /// 已知限制：只遍历前 inputTargetSearchMaxNodes 个节点、深度不超过 inputTargetSearchMaxDepth、总时长不超过 inputTargetSearchTimeout，
     /// 超出部分的输入框视为不存在；
     /// 出现输入框位于超大窗口树深处而找不到的应用时重新评估上限。
-    static func focusWritableInput(sourcePID: pid_t) async -> Bool {
+    static func focusWritableInput(sourcePID: pid_t, selection: AXUIElement?) async -> Bool {
         let app = AXUIElementCreateApplication(sourcePID)
-        if let focused = focusedElement(from: app), isWritableInput(focused) { return true }
+        // 来源不提供焦点（如微信）时无法判断选区位置，按焦点控件处理，直接粘贴。
+        // 已知限制：这类应用的窗口只暴露窗口按钮，选区在只读区域时粘贴不会写入，也无法检测失败；应用开放辅助功能后重新评估。
+        guard let focused = focusedElement(from: app) else { return true }
+        // 焦点控件内的选区由粘贴原地替换；只读区域的选区不在焦点控件上，才去窗口内查找输入框。
+        if let selection, CFEqual(selection, focused) { return true }
+        if let role = role(of: focused), AppConstants.axTextInputRoles.contains(role), !isSecure(focused) { return true }
         guard let window = axElement(attribute(app, kAXFocusedWindowAttribute as CFString)) else { return false }
         // 广度优先遍历窗口树，找到第二个候选即可判定为多个、提前结束。
         var queue: [(element: AXUIElement, depth: Int)] = [(window, 0)]

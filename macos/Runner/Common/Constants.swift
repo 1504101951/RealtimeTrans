@@ -139,6 +139,11 @@ enum AppConstants {
     static let liveRecordingKey = "liveRecording"
     /// screenshotIncludesCursor 协议值；区域截图冻结帧是否包含鼠标指针，Dart 设置写入、冻结时读取（#105）。与Dart常量同步。
     static let screenshotIncludesCursorKey = "screenshotIncludesCursor"
+    /// 全局与输入翻译的主要/次要语言偏好键；语言识别据此在低置信度时取用户语言，与 Dart PreferenceKeys 同步。
+    static let userLanguageKeys = ["primaryLanguage", "secondaryLanguage", "inputPrimaryLanguage", "inputSecondaryLanguage"]
+    /// 语言识别直接采用首位结果的最低置信度；低于它时只在前若干名中取用户语言。
+    static let languageDetectionConfidence = 0.5
+    static let languageDetectionCandidates = 3
     /// recordingShowsClicks 协议值；区域与显示器录制是否由系统绘制鼠标点击高亮，Dart 设置写入、开始录制时读取（#110）。与Dart常量同步。
     static let recordingShowsClicksKey = "recordingShowsClicks"
     /// scrollCaptureMode 偏好键；长截图滚动方式 manual/automatic，开始长截图时读取（#112），与Dart常量同步。
@@ -319,6 +324,10 @@ enum AppConstants {
     static let vocabularyListMethod = "vocabularyList"
     /// saveTextFile 协议值；经系统保存面板保存文本文件，与Dart常量同步。
     static let saveTextFileMethod = "saveTextFile"
+    /// openGlossaryFile 协议值；系统面板读取术语 CSV/JSON，与 Dart 常量同步。
+    static let openGlossaryFileMethod = "openGlossaryFile"
+    /// cancelScreenshotTranslation 协议值；截图生命周期结束时取消主引擎翻译。
+    static let cancelScreenshotTranslationMethod = "cancelScreenshotTranslation"
     /// toggleSpeech 协议值；朗读或停止朗读卡片一栏文字，与Dart常量同步。
     static let toggleSpeechMethod = "toggleSpeech"
     /// stopSpeech 协议值；停止当前朗读，与Dart常量同步。

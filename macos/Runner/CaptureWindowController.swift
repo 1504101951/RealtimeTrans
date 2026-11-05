@@ -897,7 +897,7 @@ final class CaptureShadeView: NSView {
         ])
     }
 
-    /// text为提示，width为可用文字宽；返回换行后的整点文字尺寸，宽度不超过width；输入翻译失败气泡共用（#99）。
+    /// text为提示，width为可用文字宽；返回换行后的整点文字尺寸，宽度不超过width。
     static func hintTextSize(_ text: String, width: CGFloat) -> NSSize {
         let bounds = hintText(text, isError: false).boundingRect(
             with: NSSize(width: width, height: .greatestFiniteMagnitude),

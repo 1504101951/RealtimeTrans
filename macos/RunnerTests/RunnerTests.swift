@@ -1,5 +1,7 @@
 import Cocoa
 import CoreImage
+import ImageIO
+import UniformTypeIdentifiers
 import FlutterMacOS
 import ServiceManagement
 import Translation
@@ -8,6 +10,88 @@ import XCTest
 @testable import translate_app
 
 class RunnerTests: XCTestCase {
+    /// 无参数；真实 PNG 保留透明 BGRA 和尺寸、动图只解首帧、方向元数据归正、损坏字节拒绝，无返回值。
+    /// 3×2 非方形输入验证旋转尺寸，半透明红色验证预乘 alpha 不丢失。
+    @MainActor
+    func testImportedImageDecodePreservesPixelsOrientationAndFirstFrame() throws {
+        let transparent = try captureImageFixture(width: 3, height: 2, color: NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 0.5))
+        let png = NSMutableData()
+        let encoded = try XCTUnwrap(CGImageDestinationCreateWithData(png, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(encoded, transparent, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(encoded))
+        let decoded = try ScreenshotWindowController.decodeImage(png as Data)
+        XCTAssertEqual(decoded.width, 3)
+        XCTAssertEqual(decoded.height, 2)
+        XCTAssertEqual(decoded.alphaInfo, .premultipliedFirst)
+        XCTAssertEqual(decoded.bitmapInfo.intersection(.byteOrderMask), .byteOrder32Little)
+        let pixels = try XCTUnwrap(decoded.dataProvider?.data) as Data
+        XCTAssertEqual(pixels[0], 0)
+        XCTAssertEqual(pixels[1], 0)
+        XCTAssertEqual(Int(pixels[2]), 128, accuracy: 1)
+        XCTAssertEqual(Int(pixels[3]), 128, accuracy: 1)
+
+        let red = try captureImageFixture(width: 3, height: 2, color: .red)
+        let blue = try captureImageFixture(width: 3, height: 2, color: .blue)
+        let gif = NSMutableData()
+        let animation = try XCTUnwrap(CGImageDestinationCreateWithData(gif, UTType.gif.identifier as CFString, 2, nil))
+        CGImageDestinationAddImage(animation, red, nil)
+        CGImageDestinationAddImage(animation, blue, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(animation))
+        let first = try ScreenshotWindowController.decodeImage(gif as Data)
+        let firstPixels = try XCTUnwrap(first.dataProvider?.data) as Data
+        XCTAssertEqual(firstPixels[2], 255)
+        XCTAssertEqual(firstPixels[0], 0)
+
+        let tiff = NSMutableData()
+        let oriented = try XCTUnwrap(CGImageDestinationCreateWithData(tiff, UTType.tiff.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(oriented, red, [kCGImagePropertyOrientation: 6] as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(oriented))
+        let rotated = try ScreenshotWindowController.decodeImage(tiff as Data)
+        XCTAssertEqual(rotated.width, 2)
+        XCTAssertEqual(rotated.height, 3)
+        XCTAssertThrowsError(try ScreenshotWindowController.decodeImage(Data("invalid".utf8)))
+    }
+
+    /// 无参数；独立剪贴板图片进入普通编辑器并拒绝屏幕采集，关闭后身份失效；取消解码不能迟到开窗。
+    @MainActor
+    func testClipboardImageCreatesIndependentEditorAndCancelsPendingDecode() async throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let data = try screenshotFixture(width: 12, height: 8, color: .red)
+        XCTAssertTrue(pasteboard.setData(data, forType: .png))
+        let controller = ScreenshotWindowController(pasteboard: pasteboard)
+        defer { controller.shutdown() }
+        let cancelled = expectation(description: "图片取消后结束解码")
+        controller.onCapturingChanged = { if !$0 { cancelled.fulfill() } }
+        controller.openClipboardImage()
+        // cancelCapture 立即撤销尚未解码完成的图片，后台完成不得创建编辑会话。
+        controller.cancelCapture()
+        await fulfillment(of: [cancelled], timeout: 10)
+        controller.onCapturingChanged = nil
+        var state: [String: Any]?
+        controller.handle(FlutterMethodCall(methodName: AppConstants.getScreenshotMethod, arguments: nil)) {
+            state = $0 as? [String: Any]
+        }
+        XCTAssertNil(state?["id"])
+        let loaded = expectation(description: "图片解码完成")
+        controller.onCapturingChanged = { if !$0 { loaded.fulfill() } }
+        controller.openClipboardImage()
+        await fulfillment(of: [loaded], timeout: 10)
+        controller.onCapturingChanged = nil
+        let window = try await waitForScreenshotEditor()
+        controller.handle(FlutterMethodCall(methodName: AppConstants.getScreenshotMethod, arguments: nil)) {
+            state = $0 as? [String: Any]
+        }
+        let id = try XCTUnwrap(state?["id"] as? String)
+        XCTAssertEqual(state?["canCaptureMedia"] as? Bool, false)
+        XCTAssertEqual(state?["width"] as? CGFloat, 12)
+        XCTAssertEqual(state?["height"] as? CGFloat, 8)
+        XCTAssertNil(controller.liveCaptureID)
+        XCTAssertFalse(window.styleMask.contains(.nonactivatingPanel))
+        XCTAssertTrue(controller.isCurrentCapture(id))
+        window.close()
+        XCTAssertFalse(controller.isCurrentCapture(id))
+    }
     /// 尺寸和颜色为测试输入；返回实际像素明确的 PNG，避免动态颜色在离屏上下文中失效。
     @MainActor
     private func screenshotFixture(width: Int, height: Int, color: NSColor) throws -> Data {
@@ -1127,6 +1211,23 @@ class RunnerTests: XCTestCase {
         let blank = try screenshotFixture(width: 64, height: 64, color: .white)
         let none = try await ScreenCaptureService.detectCodes(image: ScreenCaptureService.decodeImage(png: blank))
         XCTAssertEqual(none, [])
+    }
+
+    /// 无参数；语言识别低置信度时取用户语言，中文按字形取用户的简繁写法（#1）。
+    /// 边界：hello 首位 en 仅 0.13 但在前 3 名且为用户语言；ok 前 3 名都不是用户语言返回 nil；
+    /// 你好被识别为繁体 0.80，转换为简体不变，按用户简体；含繁体独有字的句子保持繁体；首位达 0.5 直接采用。
+    func testLanguageDetectionPrefersUserLanguages() {
+        let user = ["zh-CN", "en"]
+        XCTAssertEqual(LanguageDetection.resolve(
+            hypotheses: [("en", 0.13), ("nl", 0.11), ("id", 0.10)], text: "hello", preferred: user), "en")
+        XCTAssertNil(LanguageDetection.resolve(
+            hypotheses: [("pl", 0.29), ("nl", 0.09), ("ro", 0.09)], text: "ok", preferred: user))
+        XCTAssertEqual(LanguageDetection.resolve(
+            hypotheses: [("zh-Hant", 0.80), ("zh-Hans", 0.20)], text: "你好", preferred: user), "zh-Hans")
+        XCTAssertEqual(LanguageDetection.resolve(
+            hypotheses: [("zh-Hant", 0.99)], text: "這是繁體中文", preferred: user), "zh-Hant")
+        XCTAssertEqual(LanguageDetection.resolve(
+            hypotheses: [("fr", 0.90)], text: "Bonjour", preferred: user), "fr")
     }
 
     /// 无参数；只有带主机名的 http/https 内容可交给浏览器，协议大小写不敏感，其他协议与无协议文字返回 nil（#108）。

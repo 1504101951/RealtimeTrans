@@ -5,7 +5,7 @@ Dart业务逻辑和Flutter界面行为回归测试。
 1. [api_translation_provider_test.dart](api_translation_provider_test.dart)：验证官方翻译服务和模型适配的请求与响应契约、模型服务未填 API Key 时不带认证头，术语表命中与未命中时的请求内容，以及按思考开关的请求体：DeepSeek 发送 enabled 或 disabled、Anthropic 发送 2048 预算且最大输出不大于预算时连接前失败、OpenAI 官方不发送思考参数。
 2. [flutter_test_config.dart](flutter_test_config.dart)：统一初始化Flutter测试所需的运行配置。
 3. [glass_appearance_test.dart](glass_appearance_test.dart)：验证玻璃主题和跨窗口外观设置。
-4. [history_app_test.dart](history_app_test.dart)：验证历史卡片内容、分页与记录设置交互。
+4. [history_app_test.dart](history_app_test.dart)：验证历史筛选、单条删除与清空、期限确认及刷新/分页失败后的重试。
 5. [history_channel_test.dart](history_channel_test.dart)：验证截图翻译与设置提交等待期间，历史分页和记录开关仍可独立完成。
 6. [index.md](index.md)：索引本目录直接子文件和子目录的用途。
 7. [language_direction_test.dart](language_direction_test.dart)：验证主要语言、次要语言及未知检测结果的翻译方向。
@@ -14,17 +14,17 @@ Dart业务逻辑和Flutter界面行为回归测试。
 10. [paragraph_translation_test.dart](paragraph_translation_test.dart)：验证段落结构、翻译配对与失败边界，以及按段落分批的上限、整片失败与同语言直通。
 11. [permission_wizard_app_test.dart](permission_wizard_app_test.dart)：验证权限向导显示、状态刷新与完成行为。
 12. [permission_wizard_test.dart](permission_wizard_test.dart)：验证两项权限齐备后的进入条件。
-13. [screenshot_app_test.dart](screenshot_app_test.dart)：验证截图编辑、标注、导出与识别结果中的二维码、条码及链接打开行为，以及美化行背景调色盘、「无背景」与下拉可用状态，贴纸下拉框的 Emoji 段放置、两段「管理贴纸…」与下拉框高度不变，贴纸经美化子级放置、导出与 Delete 删除。
+13. [screenshot_app_test.dart](screenshot_app_test.dart)：验证无屏幕权限的导入图片编辑、OCR/翻译及屏幕采集禁用，截图标注、导出与识别结果中的二维码、条码及链接打开行为，以及美化行背景调色盘、「无背景」与下拉可用状态，贴纸下拉框的 Emoji 段放置、两段「管理贴纸…」与下拉框高度不变，贴纸经美化子级放置、导出与 Delete 删除。
 14. [screenshot_controls_test.dart](screenshot_controls_test.dart)：验证截图工具快捷键、选择、拉伸、方向键微调、固定比例及确认行为。
 15. [screenshot_toolbar_preferences_test.dart](screenshot_toolbar_preferences_test.dart)：验证工具排序、显隐、快捷键录制和配置校验。
-16. [screenshot_translation_test.dart](screenshot_translation_test.dart)：验证截图文本翻译、捕获失效与历史写入。
+16. [screenshot_translation_test.dart](screenshot_translation_test.dart)：验证截图文本翻译、静默分片取消、迟到识别和捕获失效不写历史、新请求独立完成。
 17. [selection_history_test.dart](selection_history_test.dart)：验证选区翻译成功、失败和取消时的历史记录边界，以及输入翻译不显示卡片、替换成功结束会话与未替换原因交给失败气泡。
 18. [selection_session_test.dart](selection_session_test.dart)：验证选区翻译生命周期、取消和状态变化，以及卡片服务菜单只影响本卡片、非模型服务的润色失败、输入翻译使用独立语言方向。
 19. [settings_app_test.dart](settings_app_test.dart)：验证设置页面交互、服务显示、术语表增删改、提示词弹窗的四个字段、恢复默认与空值校验、思考开关随提示词保存、翻译语言分段只改输入翻译一组、贴纸添加与删除、确认截图动作、长截图滚动方式及配置更新。
 20. [settings_autosave_test.dart](settings_autosave_test.dart)：验证后台自动保存的串行、冲突和失败处理。
 21. [settings_spec_test.dart](settings_spec_test.dart)：验证设置界面是否符合数值、密度与交互规格，含权限卡片下方的离线翻译语言入口。
 22. [settings_test.dart](settings_test.dart)：验证设置数据往返与配置校验，含模型服务 API Key 可留空、四种模式提示词的默认值和空值拒绝、思考开关缺省全关与往返，以及输入翻译语言的复制、隔离与往返。
-23. [translation_history_test.dart](translation_history_test.dart)：验证翻译历史存储、分页及记录开关。
+23. [translation_history_test.dart](translation_history_test.dart)：验证翻译历史组合查询、时间边界、游标分页、期限确认与清理事务、删除及记录开关。
 24. [translation_overlay_test.dart](translation_overlay_test.dart)：验证翻译按钮、双语结果与失败界面行为，以及服务菜单在润色模式只列模型服务。
 25. [translation_resume_test.dart](translation_resume_test.dart)：验证分片失败恢复、进度保留及取消边界。
 26. [unofficial_google_provider_test.dart](unofficial_google_provider_test.dart)：验证零配置Google翻译的解析、失败处理（含限流可重试）与单篇请求超时。
@@ -52,3 +52,5 @@ Dart业务逻辑和Flutter界面行为回归测试。
 47. [sticker_test.dart](sticker_test.dart)：按像素验证贴纸位图按范围绘制、旋转后的占位，开启美化时可画在背景留白区、不美化时裁到截图范围，以及贴纸默认大小的计算、往返与校验。
 48. [support/](support/index.md)：测试共用夹具，提供测试图片解码与截图快照 BGRA 像素转换。
 49. [date_text_test.dart](date_text_test.dart)：验证历史与生词本日期文本的补零。
+
+50. [glossary_import_test.dart](glossary_import_test.dart)：验证术语文件预览、重复处理、整批拒绝、导出、串行保存与失败后取消不污染设置。

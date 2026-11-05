@@ -312,7 +312,8 @@ final class SelectionMonitor {
             let anchor = NSEvent.mouseLocation
             MacPlatformBridge.Shared.instance?.emitSelectionCaptured(
                 text: text, gesture: gesture.rawValue, x: anchor.x, y: anchor.y, sourcePID: pid, sourceAppName: sourceAppName,
-                inputAnchor: gesture == .inputHotkey ? AccessibilitySelection.inputAnchor(sourcePID: pid, selectionElement: selection.element) : nil
+                inputAnchor: gesture == .inputHotkey ? AccessibilitySelection.inputAnchor(sourcePID: pid, selectionElement: selection.element) : nil,
+                inputSelection: gesture == .inputHotkey ? selection.element : nil
             )
             if let inputReadStart { PerformanceLog.record("input-read", since: inputReadStart) }
             // 选区通知覆盖程序清空与控件焦点变化，不需要轮询剪贴板。
